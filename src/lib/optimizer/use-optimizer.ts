@@ -1,0 +1,74 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+  OptimizerInput,
+  OptimizerOutput,
+  OptimizerRequest,
+  OptimizerResponse,
+  StatArray,
+} from "./types";
+
+/**
+ * Drives the optimizer Web Worker. Runs are tagged with an increasing seq so that when
+ * changes fire faster than the worker finishes, only the latest run's messages are applied
+ * (stale ones are dropped). Ceilings stream in ahead of the final result for live slider
+ * animation; the previous result stays visible while a new run is in flight (no flicker).
+ */
+export function useOptimizer() {
+  const workerRef = useRef<Worker | null>(null);
+  const seqRef = useRef(0);
+  const [result, setResult] = useState<OptimizerOutput | null>(null);
+  const [ceilings, setCeilings] = useState<StatArray | null>(null);
+  const [running, setRunning] = useState(false);
+
+  const getWorker = useCallback(() => {
+    if (!workerRef.current) {
+      const worker = new Worker(new URL("./worker.ts", import.meta.url), {
+        type: "module",
+      });
+      worker.onmessage = (e: MessageEvent<OptimizerResponse>) => {
+        const msg = e.data;
+        if (msg.seq !== seqRef.current) return; // superseded run — ignore
+        if (msg.kind === "ceilings") {
+          setCeilings(msg.ceilings);
+        } else {
+          setResult(msg.output);
+          setCeilings(msg.output.ceilings);
+          setRunning(false);
+        }
+      };
+      worker.onerror = () => setRunning(false);
+      workerRef.current = worker;
+    }
+    return workerRef.current;
+  }, []);
+
+  useEffect(
+    () => () => {
+      workerRef.current?.terminate();
+      workerRef.current = null;
+    },
+    [],
+  );
+
+  const run = useCallback(
+    (input: OptimizerInput) => {
+      const seq = ++seqRef.current;
+      setRunning(true);
+      getWorker().postMessage({ seq, input } satisfies OptimizerRequest);
+    },
+    [getWorker],
+  );
+
+  // Abandon the in-flight run: bump the seq (so any late messages are ignored) and tear
+  // the worker down so its CPU work stops.
+  const cancel = useCallback(() => {
+    seqRef.current++;
+    workerRef.current?.terminate();
+    workerRef.current = null;
+    setRunning(false);
+  }, []);
+
+  return { run, cancel, result, ceilings, running };
+}
