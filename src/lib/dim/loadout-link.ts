@@ -160,9 +160,34 @@ export function buildDimLoadoutUrl(loadout: DimLoadout): string {
   return DIM_LOADOUT_URL + encodeURIComponent(JSON.stringify(loadout));
 }
 
-export function defaultLoadoutName(
-  loadout: OptimizerLoadout,
-  exoticName?: string,
-): string {
-  return `Stat Builder ${loadout.total} — ${exoticName ?? "no exotic"}`;
+/**
+ * Short set-bonus tag for the loadout name: single-word set names read fine
+ * as-is ("CODA", "Bushido"); multi-word names collapse to initials, dropping a
+ * trailing "Set" ("Smoke Jumper Set" → "SJ").
+ */
+export function abbreviateSetName(name: string): string {
+  const words = name.split(/\s+/).filter((w) => w.toLowerCase() !== "set");
+  if (words.length <= 1) return words[0] ?? name;
+  return words.map((w) => w[0]).join("").toUpperCase();
+}
+
+/**
+ * Default editor placeholder: "<Exotic> · <Subclass> · <SET 2pc/4pc>", keeping
+ * only the parts the build actually has. Set counts collapse to the bonus tier
+ * that's active (2pc for 2–3 pieces, 4pc for 4+).
+ */
+export function defaultLoadoutName(input: {
+  exoticName?: string;
+  subclassName?: string;
+  sets?: { name: string; count: number }[];
+  total: number;
+}): string {
+  const parts: string[] = [];
+  if (input.exoticName) parts.push(input.exoticName);
+  if (input.subclassName) parts.push(input.subclassName);
+  for (const s of input.sets ?? []) {
+    if (s.count < 2) continue;
+    parts.push(`${abbreviateSetName(s.name)} ${s.count >= 4 ? 4 : 2}pc`);
+  }
+  return parts.length > 0 ? parts.join(" · ") : `Stat Builder ${input.total}`;
 }

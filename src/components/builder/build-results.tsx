@@ -2,16 +2,27 @@
 
 import { Fragment, useState, type ReactNode } from "react";
 import Image from "next/image";
-import { CaretDown } from "@phosphor-icons/react";
+import { ArrowSquareOut, CaretDown, CircleNotch } from "@phosphor-icons/react";
+import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 import type { ArmorPiece } from "@/lib/armory/normalize";
 import type { ArmorSetInfo } from "@/lib/armory/sets";
+import type { ArmoryCharacter } from "@/lib/armory/fetch";
 import {
+  CLASS_NAMES,
   STAT_DISPLAY_ORDER,
   STAT_LABELS,
   STAT_ORDER,
   type StatIconMap,
 } from "@/lib/armory/stats";
+import type { StatModHashes } from "@/lib/dim/mod-hashes";
+import {
+  buildDimLoadout,
+  buildDimLoadoutUrl,
+  defaultLoadoutName,
+} from "@/lib/dim/loadout-link";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { BUNGIE_IMAGE_BASE } from "@/lib/bungie/constants";
 import type {
@@ -119,6 +130,22 @@ function BreakdownRow({
   );
 }
 
+/** The active subclass's DIM handoff data (undefined hash = unknown subclass/class combo). */
+export interface DimSubclassInput {
+  name: string;
+  itemHash?: number;
+  fragmentHashes: number[];
+  socketStart: number;
+}
+
+interface BuildActionProps {
+  characters: ArmoryCharacter[];
+  statModHashes: StatModHashes[] | null;
+  tuningPlugHashes: Map<string, number> | null;
+  subclass?: DimSubclassInput;
+  onEquipped?: () => void;
+}
+
 /** A single build: a collapsed stat header that expands to a per-piece breakdown. */
 function BuildRow({
   loadout,
@@ -127,6 +154,11 @@ function BuildRow({
   statIcons,
   balancedTuningIcon,
   targets,
+  characters,
+  statModHashes,
+  tuningPlugHashes,
+  subclass,
+  onEquipped,
 }: {
   loadout: OptimizerLoadout;
   pieceMap: Map<string, ArmorPiece>;
@@ -134,7 +166,7 @@ function BuildRow({
   statIcons: StatIconMap;
   balancedTuningIcon?: string;
   targets: number[];
-}) {
+} & BuildActionProps) {
   const [open, setOpen] = useState(false);
   const pieces = loadout.pieceIds.map((id) => pieceMap.get(id));
   const exotic = pieces.find((p) => p?.isExotic);
@@ -299,8 +331,182 @@ function BuildRow({
               </span>
             )}
           />
+
+          <BuildActions
+            loadout={loadout}
+            pieces={pieces}
+            exoticName={exotic?.name}
+            setBadges={setBadges}
+            targets={targets}
+            characters={characters}
+            statModHashes={statModHashes}
+            tuningPlugHashes={tuningPlugHashes}
+            subclass={subclass}
+            onEquipped={onEquipped}
+          />
         </div>
       )}
+    </div>
+  );
+}
+
+/** Per-item outcome from POST /api/bungie/equip. */
+interface EquipResult {
+  itemInstanceId: string;
+  ok: boolean;
+  message?: string;
+}
+
+/**
+ * Footer of an expanded build: hand the build to DIM's loadout editor, or pull
+ * the pieces to a character and equip them. Both need every piece still present
+ * in the armory (a refetch can drop instances from stale results).
+ */
+function BuildActions({
+  loadout,
+  pieces,
+  exoticName,
+  setBadges,
+  targets,
+  characters,
+  statModHashes,
+  tuningPlugHashes,
+  subclass,
+  onEquipped,
+}: {
+  loadout: OptimizerLoadout;
+  pieces: (ArmorPiece | undefined)[];
+  exoticName?: string;
+  setBadges: { name: string; count: number }[];
+  targets: number[];
+} & BuildActionProps) {
+  const queryClient = useQueryClient();
+  const [equipping, setEquipping] = useState(false);
+
+  const resolved = pieces.filter((p): p is ArmorPiece => p !== undefined);
+  const complete = resolved.length === loadout.pieceIds.length;
+  const buildClass = resolved[0]?.classType;
+  const targetCharacter = characters
+    .filter((c) => c.classType === buildClass)
+    .sort((a, b) => Date.parse(b.dateLastPlayed) - Date.parse(a.dateLastPlayed))[0];
+
+  const missingTitle = complete
+    ? undefined
+    : "Refresh your gear — a piece in this build is missing";
+
+  const openInDim = () => {
+    if (!complete || !statModHashes || !tuningPlugHashes) return;
+    const url = buildDimLoadoutUrl(
+      buildDimLoadout({
+        loadout,
+        pieces: resolved,
+        classType: buildClass ?? 3,
+        targets,
+        statModHashes,
+        tuningPlugHashes,
+        subclass:
+          subclass?.itemHash !== undefined
+            ? {
+                itemHash: subclass.itemHash,
+                fragmentHashes: subclass.fragmentHashes,
+                socketStart: subclass.socketStart,
+              }
+            : undefined,
+        name: defaultLoadoutName({
+          exoticName,
+          subclassName: subclass?.name,
+          sets: setBadges,
+          total: loadout.total,
+        }),
+      }),
+    );
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const equip = async () => {
+    if (!complete || !targetCharacter || equipping) return;
+    setEquipping(true);
+    try {
+      const res = await fetch("/api/bungie/equip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          characterId: targetCharacter.id,
+          items: resolved.map((p) => ({
+            itemInstanceId: p.instanceId,
+            itemHash: p.itemHash,
+            location: p.location,
+            characterId: p.characterId,
+          })),
+        }),
+      });
+      const data = (await res.json()) as {
+        results?: EquipResult[];
+        error?: string;
+        reauth?: boolean;
+      };
+
+      if (!res.ok) {
+        toast.error(data.error ?? "Equip failed");
+        // The server cleared the stale (pre-scope or expired) session; surfacing
+        // the session query brings back the sign-in card.
+        if (data.reauth) {
+          void queryClient.invalidateQueries({ queryKey: ["session"] });
+        }
+        return;
+      }
+
+      const failed = (data.results ?? []).filter((r) => !r.ok);
+      if (failed.length === 0) {
+        toast.success(
+          `Equipped on your ${CLASS_NAMES[buildClass ?? -1] ?? "character"}`,
+        );
+        onEquipped?.();
+      } else {
+        const names = failed.map((f) => {
+          const piece = resolved.find((p) => p.instanceId === f.itemInstanceId);
+          return `${piece?.name ?? "Unknown piece"}: ${f.message ?? "failed"}`;
+        });
+        toast.warning(
+          `Some items didn't equip — ${names.join("; ")}`,
+        );
+        onEquipped?.();
+      }
+    } catch {
+      toast.error("Equip failed — check your connection and try again");
+    } finally {
+      setEquipping(false);
+    }
+  };
+
+  return (
+    <div className="border-border/60 col-span-full mt-1 flex items-center justify-end gap-2 border-t py-2.5">
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={equip}
+        disabled={!complete || !targetCharacter || equipping}
+        title={
+          missingTitle ??
+          (targetCharacter
+            ? undefined
+            : `No ${CLASS_NAMES[buildClass ?? -1] ?? "matching"} character`)
+        }
+      >
+        {equipping ? (
+          <CircleNotch className="animate-spin" aria-hidden />
+        ) : null}
+        Equip items
+      </Button>
+      <Button
+        size="sm"
+        onClick={openInDim}
+        disabled={!complete || !statModHashes || !tuningPlugHashes}
+        title={missingTitle}
+      >
+        <ArrowSquareOut weight="duotone" aria-hidden />
+        Open in DIM
+      </Button>
     </div>
   );
 }
@@ -312,6 +518,11 @@ export function BuildResults({
   setMap,
   statIcons,
   balancedTuningIcon,
+  characters,
+  statModHashes,
+  tuningPlugHashes,
+  subclass,
+  onEquipped,
 }: {
   result: OptimizerOutput;
   pieceMap: Map<string, ArmorPiece>;
@@ -319,7 +530,7 @@ export function BuildResults({
   setMap: Map<number, ArmorSetInfo>;
   statIcons: StatIconMap;
   balancedTuningIcon?: string;
-}) {
+} & BuildActionProps) {
   if (result.loadouts.length === 0) {
     return (
       <p className="text-muted-foreground text-sm">
@@ -351,6 +562,11 @@ export function BuildResults({
             statIcons={statIcons}
             balancedTuningIcon={balancedTuningIcon}
             targets={targets}
+            characters={characters}
+            statModHashes={statModHashes}
+            tuningPlugHashes={tuningPlugHashes}
+            subclass={subclass}
+            onEquipped={onEquipped}
           />
         ))}
       </div>

@@ -9,6 +9,15 @@ function clampNumber(n: number, lo: number, hi: number) {
   return Math.min(hi, Math.max(lo, n))
 }
 
+/** Matches `size-3.5` on the thumb element. */
+const SLIDER_THUMB_SIZE = "0.875rem"
+
+/** CSS `left` for a value label/thumb center with `thumbAlignment="edge"`. */
+function sliderEdgeAlignedLeft(value: number, min: number, max: number): string {
+  const fraction = max <= min ? 0 : (value - min) / (max - min)
+  return `calc(${SLIDER_THUMB_SIZE} / 2 + (100% - ${SLIDER_THUMB_SIZE}) * ${fraction})`
+}
+
 function Slider({
   className,
   defaultValue,
@@ -114,7 +123,9 @@ function Slider({
               data-slot="slider-ceiling"
               aria-hidden
               className="absolute left-0 h-full bg-foreground/25 transition-[width] duration-300 ease-out"
-              style={{ width: `${((ceiling - min) / (max - min)) * 100}%` }}
+              style={{
+                width: sliderEdgeAlignedLeft(ceiling, min, max),
+              }}
             />
           )}
           <SliderPrimitive.Indicator
@@ -144,4 +155,4 @@ function Slider({
   )
 }
 
-export { Slider }
+export { Slider, sliderEdgeAlignedLeft }

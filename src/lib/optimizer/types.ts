@@ -21,6 +21,12 @@ export interface OptimizerPiece {
   setHash?: number;
   /** Tier-5 tuning, if this piece can be tuned. The optimizer auto-picks the tune. */
   tuning?: PieceTuning;
+  /**
+   * Artifice piece (legacy exotic) — has a free +3 any-stat mod slot, outside the
+   * normal mod budget. The optimizer auto-picks the stat. Mutually exclusive with
+   * `tuning` in practice (artifice is legacy-only, tuning is Tier-5-only).
+   */
+  artifice?: boolean;
 }
 
 /** Require at least `count` equipped pieces from a given armor set (2 = 2pc bonus, 4 = 4pc). */
@@ -84,6 +90,10 @@ export interface OptimizerLoadout {
   modBonus: StatArray;
   /** How many major / minor mods were used. */
   modsUsed: { major: number; minor: number };
+  /** Points each stat gained from artifice (+3) mods. */
+  artificeBonus: StatArray;
+  /** Per slot: the stat index the piece's artifice +3 went to (null = no artifice / unspent). */
+  artifice: (number | null)[];
   total: number;
   exotic: boolean;
 }

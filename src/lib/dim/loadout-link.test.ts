@@ -1,8 +1,10 @@
 import { test, expect } from "vitest";
 import type { ArmorPiece } from "@/lib/armory/normalize";
-import type { OptimizerLoadout, StatArray } from "@/lib/optimizer/types";
+import type { StatArray } from "@/lib/armory/stats";
+import type { OptimizerLoadout } from "@/lib/optimizer/types";
 import { BALANCED_TUNING_PLUG_HASH } from "../armory/stats";
 import {
+  abbreviateSetName,
   buildDimLoadout,
   buildDimLoadoutUrl,
   decomposeModBonus,
@@ -187,11 +189,35 @@ test("URL round-trips through decodeURIComponent + JSON.parse", () => {
   expect(decoded.parameters.assumeArmorMasterwork).toBe(3);
 });
 
-test("defaultLoadoutName includes total and exotic name", () => {
-  expect(defaultLoadoutName(makeLoadout({ total: 375 }), "Wormhusk Crown")).toBe(
-    "Stat Builder 375 — Wormhusk Crown",
-  );
-  expect(defaultLoadoutName(makeLoadout({ total: 300 }))).toBe(
-    "Stat Builder 300 — no exotic",
-  );
+test("abbreviateSetName keeps single words and collapses multi-word names", () => {
+  expect(abbreviateSetName("CODA")).toBe("CODA");
+  expect(abbreviateSetName("Bushido")).toBe("Bushido");
+  expect(abbreviateSetName("Collective Psyche")).toBe("CP");
+  expect(abbreviateSetName("Smoke Jumper Set")).toBe("SJ");
+});
+
+test("defaultLoadoutName joins exotic, subclass, and set-bonus tiers", () => {
+  expect(
+    defaultLoadoutName({
+      exoticName: "Celestial Nighthawk",
+      subclassName: "Prismatic",
+      sets: [{ name: "CODA", count: 4 }],
+      total: 465,
+    }),
+  ).toBe("Celestial Nighthawk · Prismatic · CODA 4pc");
+  // 3 pieces only activate the 2pc bonus; sub-2 counts are dropped.
+  expect(
+    defaultLoadoutName({
+      subclassName: "Solar",
+      sets: [
+        { name: "Collective Psyche", count: 3 },
+        { name: "Bushido", count: 1 },
+      ],
+      total: 400,
+    }),
+  ).toBe("Solar · CP 2pc");
+});
+
+test("defaultLoadoutName falls back to total when nothing else exists", () => {
+  expect(defaultLoadoutName({ total: 300 })).toBe("Stat Builder 300");
 });

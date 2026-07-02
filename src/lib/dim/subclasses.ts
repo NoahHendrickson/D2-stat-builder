@@ -7,7 +7,8 @@ import type { Subclass } from "../armory/fragments";
  * (itemType 16 — see filterInventoryItems in src/lib/manifest/load.ts); keeping
  * them would force a full manifest re-download for a static 18-row table.
  * Subclass item hashes have been stable since their 3.0 reworks.
- * Verified against the live manifest via Destiny2.GetDestinyEntityDefinition.
+ * All 18 verified against manifest 244164.26.06.16.2053-2-bnet.65465
+ * (itemType 16 + matching classType).
  */
 export const SUBCLASS_ITEM_HASHES: Record<Subclass, Record<number, number>> = {
   Arc: {
@@ -44,10 +45,10 @@ export const SUBCLASS_ITEM_HASHES: Record<Subclass, Record<number, number>> = {
 
 /**
  * First fragment socket index on a subclass item, used for the DIM handoff's
- * socketOverrides. D2ArmorPicker exports fragments at indexes 7+ and DIM's
- * accepted-URL test fixtures include exactly that shape; DIM re-derives real
- * sockets on its side, so an off-by-one here degrades to "fragment ignored",
- * never an error.
+ * socketOverrides. Verified against the live manifest's socketEntries: every
+ * non-Prismatic subclass has fragments at sockets 7–12; Prismatic puts
+ * transcendence + grenade at 5–6 and aspects at 7–8, pushing fragments to 9–14.
+ * A wrong index degrades to "fragment ignored" in DIM, never an error.
  */
 export const FRAGMENT_SOCKET_START: Record<Subclass, number> = {
   Arc: 7,
@@ -55,5 +56,5 @@ export const FRAGMENT_SOCKET_START: Record<Subclass, number> = {
   Void: 7,
   Stasis: 7,
   Strand: 7,
-  Prismatic: 7,
+  Prismatic: 9,
 };

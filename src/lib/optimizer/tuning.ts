@@ -10,6 +10,8 @@ import type {
   OptimizerPiece,
   PieceTuning,
 } from "./types";
+// Relative import: this module runs in the worker AND in vitest, which has no "@/" alias.
+import { ARTIFICE_MOD_BONUS } from "../armory/stats";
 
 export const NUM_STATS = 6;
 export const NUM_SLOTS = 5;
@@ -30,6 +32,8 @@ export interface InternalPiece {
   exotic: boolean;
   hash?: number;
   setHash?: number;
+  /** Artifice piece — contributes a free +3 any-stat mod to the loadout's budget. */
+  artifice: boolean;
   total: number;
   /** Index of the rolled tuned stat (the +5 target), or -1 if the piece can't be tuned. */
   tuned: number;
@@ -102,6 +106,7 @@ export function makeInternalPiece(
     exotic: p.exotic,
     hash: p.hash,
     setHash: p.setHash,
+    artifice: p.artifice ?? false,
     total: statTotal(p.stats),
     tuned: allowTuning && p.tuning ? p.tuning.tuned : -1,
     tuneOpts,

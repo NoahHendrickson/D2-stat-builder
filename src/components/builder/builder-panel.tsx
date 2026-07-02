@@ -31,7 +31,7 @@ import {
   offArchetypeIndices,
   type StatIconMap,
 } from "@/lib/armory/stats";
-import { Slider } from "@/components/ui/slider";
+import { Slider, sliderEdgeAlignedLeft } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -40,9 +40,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SignInCard } from "@/components/auth/sign-in-card";
-import { ManifestStatus } from "@/components/manifest/manifest-status";
-import { ArmoryStatus } from "@/components/armory/armory-status";
 import { PieceInspector } from "@/components/armory/piece-inspector";
+import { BuilderStatusCards } from "@/components/builder/builder-status-cards";
 import { ExoticPicker } from "@/components/builder/exotic-picker";
 import { FragmentPicker } from "@/components/builder/fragment-picker";
 import { ClassEmblemTabs } from "@/components/builder/class-emblem-tabs";
@@ -56,10 +55,16 @@ import {
   resolveExoticIndex,
   SCHEMA_VERSION,
 } from "@/lib/builder/selection-storage";
+import { getStatModHashes, getTuningPlugHashes } from "@/lib/dim/mod-hashes";
+import {
+  FRAGMENT_SOCKET_START,
+  SUBCLASS_ITEM_HASHES,
+} from "@/lib/dim/subclasses";
 
 const MAX_MODS = 5;
 /** Clickable preset markers under each stat slider. */
 const STAT_TARGET_TICKS = [0, 50, 100, 150, 200] as const;
+const STAT_SLIDER_MAX = STAT_TARGET_TICKS[STAT_TARGET_TICKS.length - 1];
 /** Skeleton rows shown while a search is in flight. */
 const LOADING_ROWS = 5;
 
@@ -123,7 +128,11 @@ function useSmoothedProgress(progress: number, running: boolean, runId: number) 
   return { displayedProgress: displayed, showLoading };
 }
 
-export function BuilderPanel() {
+export function BuilderPanel({
+  showInlineStatusCards = true,
+}: {
+  showInlineStatusCards?: boolean;
+}) {
   const session = useSession();
   const armoryQuery = useArmory();
   const manifestStatus = useManifest();
@@ -251,6 +260,29 @@ export function BuilderPanel() {
   const fragments = useMemo(
     () => (manifest ? availableFragments(manifest) : null),
     [manifest],
+  );
+
+  // DIM handoff lookups: plug hashes for general stat mods and directional
+  // tuning (one manifest scan each), plus the active subclass fragments carrier.
+  const statModHashes = useMemo(
+    () => (manifest ? getStatModHashes(manifest) : null),
+    [manifest],
+  );
+  const tuningPlugHashes = useMemo(
+    () => (manifest ? getTuningPlugHashes(manifest) : null),
+    [manifest],
+  );
+  const dimSubclass = useMemo(
+    () => ({
+      name: activeSubclass,
+      itemHash:
+        classType !== null
+          ? SUBCLASS_ITEM_HASHES[activeSubclass]?.[classType]
+          : undefined,
+      fragmentHashes: [...fragSel[activeSubclass]],
+      socketStart: FRAGMENT_SOCKET_START[activeSubclass],
+    }),
+    [activeSubclass, classType, fragSel],
   );
 
   const statIcons = useMemo(() => {
@@ -442,58 +474,88 @@ export function BuilderPanel() {
 
   const renderSetRow = (s: (typeof sets)[number]) => {
     const pinned = pinnedSets.includes(s.setHash);
+    const perk2 = s.perks.find((p) => p.requiredCount === 2)?.name;
+    const perk4 = s.perks.find((p) => p.requiredCount === 4)?.name;
     return (
       <div
         key={s.setHash}
-        className="group col-span-4 grid grid-cols-subgrid items-center"
+        className="group col-span-full grid grid-cols-subgrid items-center"
       >
-        <span className="truncate text-xs">
-          {s.name}{" "}
-          <span className="text-muted-foreground">({s.ownedCount})</span>
+        <span className="flex min-w-0 items-center gap-1.5 text-xs">
+          <button
+            type="button"
+            onClick={() => togglePin(s.setHash)}
+            aria-label={pinned ? "Unpin set" : "Pin set"}
+            className={cn(
+              "shrink-0 transition-opacity focus-visible:opacity-100",
+              pinned
+                ? "text-foreground"
+                : "text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100",
+            )}
+          >
+            <PushPin
+              weight={pinned ? "fill" : "duotone"}
+              className="size-3.5"
+              aria-hidden
+            />
+          </button>
+          <span className="truncate">
+            {s.name}{" "}
+            <span className="text-muted-foreground">({s.ownedCount})</span>
+          </span>
         </span>
-        <button
-          type="button"
-          onClick={() => togglePin(s.setHash)}
-          aria-label={pinned ? "Unpin set" : "Pin set"}
-          className={cn(
-            "justify-self-center transition-opacity focus-visible:opacity-100",
-            pinned
-              ? "text-foreground"
-              : "text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100",
-          )}
-        >
-          <PushPin
-            weight={pinned ? "fill" : "duotone"}
-            className="size-3.5"
-            aria-hidden
-          />
-        </button>
         <SetToggle
           active={setReqs[s.setHash] === 2}
           disabled={s.ownedCount < 2}
           onToggle={() => toggleSet(s.setHash, 2)}
         />
+        <button
+          type="button"
+          disabled={s.ownedCount < 2}
+          onClick={() => toggleSet(s.setHash, 2)}
+          className={cn(
+            "text-muted-foreground min-w-0 truncate text-left text-xs disabled:cursor-not-allowed disabled:opacity-50",
+            s.ownedCount >= 2 && "cursor-pointer hover:text-foreground",
+          )}
+          title={perk2}
+        >
+          {perk2}
+        </button>
         <SetToggle
           active={setReqs[s.setHash] === 4}
           disabled={s.ownedCount < 4}
           onToggle={() => toggleSet(s.setHash, 4)}
         />
+        <button
+          type="button"
+          disabled={s.ownedCount < 4}
+          onClick={() => toggleSet(s.setHash, 4)}
+          className={cn(
+            "text-muted-foreground min-w-0 truncate text-left text-xs disabled:cursor-not-allowed disabled:opacity-50",
+            s.ownedCount >= 4 && "cursor-pointer hover:text-foreground",
+          )}
+          title={perk4}
+        >
+          {perk4}
+        </button>
       </div>
     );
   };
 
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 lg:items-start">
+    <div className="grid grid-cols-1 gap-8 lg:grid-cols-2 lg:items-start lg:gap-12">
       {/* Left — configure the build */}
-      <div className="space-y-4">
+      <div className="divide-border/60 divide-y">
         {ready && (
           <>
             {classes.length > 1 && classType !== null && (
-              <ClassEmblemTabs
-                characters={armory?.characters ?? []}
-                value={classType}
-                onChange={onClassChange}
-              />
+              <div className="pb-4">
+                <ClassEmblemTabs
+                  characters={armory?.characters ?? []}
+                  value={classType}
+                  onChange={onClassChange}
+                />
+              </div>
             )}
 
             <Section>
@@ -526,7 +588,7 @@ export function BuilderPanel() {
                       )}
                       <Slider
                         min={0}
-                        max={200}
+                        max={STAT_SLIDER_MAX}
                         step={1}
                         value={[targets[i]]}
                         onValueChange={(v) => setTarget(i, Array.isArray(v) ? v[0] : v)}
@@ -538,7 +600,7 @@ export function BuilderPanel() {
                         <Input
                           type="number"
                           min={0}
-                          max={200}
+                          max={STAT_SLIDER_MAX}
                           step={1}
                           value={targets[i]}
                           aria-label={`${STAT_LABELS[key]} target value`}
@@ -548,7 +610,7 @@ export function BuilderPanel() {
                             setTarget(
                               i,
                               Number.isFinite(n)
-                                ? Math.max(0, Math.min(200, n))
+                                ? Math.max(0, Math.min(STAT_SLIDER_MAX, n))
                                 : 0,
                             );
                           }}
@@ -571,14 +633,16 @@ export function BuilderPanel() {
                           </>
                         )}
                       </div>
-                      <div className="col-start-2 flex justify-between px-0.5">
+                      <div className="col-start-2 relative h-3.5">
                         {STAT_TARGET_TICKS.map((t) => {
                           // Once a ceiling is predicted, the top tick reads "max" and
                           // jumps the target to that achievable maximum instead of 200.
                           const tickValue =
-                            t === 200 && cap !== null ? cap : t;
+                            t === STAT_SLIDER_MAX && cap !== null ? cap : t;
                           const tickLabel =
-                            t === 200 && cap !== null ? "max" : String(t);
+                            t === STAT_SLIDER_MAX && cap !== null
+                              ? "max"
+                              : String(t);
                           return (
                             <button
                               key={t}
@@ -589,8 +653,11 @@ export function BuilderPanel() {
                                   ? `Set ${STAT_LABELS[key]} to its max (${tickValue})`
                                   : `Set ${STAT_LABELS[key]} to ${t}`
                               }
+                              style={{
+                                left: sliderEdgeAlignedLeft(t, 0, STAT_SLIDER_MAX),
+                              }}
                               className={cn(
-                                "text-[10px] tabular-nums transition-colors",
+                                "absolute top-0 -translate-x-1/2 text-[10px] tabular-nums transition-colors",
                                 targets[i] === tickValue
                                   ? "text-foreground"
                                   : "text-muted-foreground hover:text-foreground",
@@ -654,19 +721,18 @@ export function BuilderPanel() {
                   No sets match &ldquo;{setQuery.trim()}&rdquo;.
                 </p>
               ) : (
-                <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-x-3 gap-y-1.5">
+                <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5">
                   <span aria-hidden />
-                  <span aria-hidden />
-                  <span className="text-muted-foreground w-7 text-center text-xs">
+                  <span className="text-muted-foreground col-span-2 text-xs">
                     2pc
                   </span>
-                  <span className="text-muted-foreground w-7 text-center text-xs">
+                  <span className="text-muted-foreground col-span-2 text-xs">
                     4pc
                   </span>
                   {pinnedList.map(renderSetRow)}
                   {pinnedList.length > 0 && unpinnedList.length > 0 && (
                     <div
-                      className="border-border/60 col-span-4 my-0.5 border-t"
+                      className="border-border/60 col-span-full my-0.5 border-t"
                       aria-hidden
                     />
                   )}
@@ -721,10 +787,9 @@ export function BuilderPanel() {
         )}
 
         {/* Status + sign-in. Lives here for now; slated to be hidden later. */}
-        <div className="space-y-4 pt-2 opacity-80">
+        <div className="space-y-4 py-4 opacity-80">
           <SignInCard />
-          <ManifestStatus />
-          <ArmoryStatus />
+          {showInlineStatusCards && <BuilderStatusCards />}
           <PieceInspector />
         </div>
       </div>
@@ -773,6 +838,11 @@ export function BuilderPanel() {
             setMap={setMap}
             statIcons={statIcons}
             balancedTuningIcon={balancedTuningIcon}
+            characters={armory?.characters ?? []}
+            statModHashes={statModHashes}
+            tuningPlugHashes={tuningPlugHashes}
+            subclass={dimSubclass}
+            onEquipped={() => void armoryQuery.refetch()}
           />
         ) : (
           <p className="text-muted-foreground text-sm">
@@ -825,7 +895,7 @@ function BuildsLoading({ progress }: { progress: number }) {
 
 function Section({ title, children }: { title?: string; children: ReactNode }) {
   return (
-    <section className="border-border/60 bg-card space-y-3 rounded-xl border p-4">
+    <section className="space-y-3 py-4">
       {title ? <h3 className="text-sm font-medium">{title}</h3> : null}
       {children}
     </section>
@@ -848,7 +918,7 @@ function SetToggle({
       disabled={disabled}
       onCheckedChange={onToggle}
       aria-label="Toggle set bonus"
-      className="justify-self-center"
+      className={cn("justify-self-center", !disabled && "cursor-pointer")}
     />
   );
 }
