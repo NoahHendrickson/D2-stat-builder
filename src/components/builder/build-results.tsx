@@ -32,6 +32,7 @@ import type {
 } from "@/lib/optimizer/types";
 
 const MAX_SHOWN = 25;
+export { MAX_SHOWN };
 /** Display stat columns paired with their STAT_ORDER index (used by the build breakdown). */
 const STAT_COLS = STAT_DISPLAY_ORDER.map((key) => ({
   key,
@@ -542,10 +543,6 @@ export function BuildResults({
 
   return (
     <div className="space-y-3">
-      <p className="text-muted-foreground text-sm">
-        {result.combosValid.toLocaleString()} matching loadouts · showing top{" "}
-        {Math.min(MAX_SHOWN, result.loadouts.length)}
-      </p>
       {result.capped && (
         <p className="text-xs text-amber-600/90 dark:text-amber-500/90">
           Hit the time limit — showing the best found so far. Narrow your targets

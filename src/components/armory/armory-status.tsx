@@ -1,6 +1,8 @@
 "use client";
 
-import { CheckCircle, CircleNotch, XCircle } from "@phosphor-icons/react";
+import { useEffect, useRef, useState } from "react";
+import { ArrowsClockwise, CheckCircle, CircleNotch, XCircle } from "@phosphor-icons/react";
+import { Button } from "@/components/ui/button";
 import { useArmory } from "@/lib/armory/use-armory";
 import { useSession } from "@/lib/auth/use-session";
 import {
@@ -26,9 +28,33 @@ const emptyCounts = (): SlotCounts => ({
   classItem: 0,
 });
 
+const REFRESH_SUCCESS_MS = 2500;
+
 export function ArmoryStatus() {
   const session = useSession();
-  const { data, isLoading, isError, error } = useArmory();
+  const { data, isLoading, isError, error, isFetching, refetch } = useArmory();
+  const [refreshSucceeded, setRefreshSucceeded] = useState(false);
+  const successTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  useEffect(
+    () => () => {
+      if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current);
+    },
+    [],
+  );
+
+  const handleRefresh = async () => {
+    setRefreshSucceeded(false);
+    const result = await refetch();
+    if (!result.isSuccess) return;
+
+    setRefreshSucceeded(true);
+    if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current);
+    successTimeoutRef.current = setTimeout(
+      () => setRefreshSucceeded(false),
+      REFRESH_SUCCESS_MS,
+    );
+  };
 
   if (!session.data?.authenticated) return null;
 
@@ -61,38 +87,56 @@ export function ArmoryStatus() {
             `${pieces.length} armor pieces · ${exotics} exotic across ${data.characters.length} characters.`}
         </CardDescription>
       </CardHeader>
-      {data && pieces.length > 0 && (
-        <CardContent>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-muted-foreground text-left">
-                <th className="pb-1 font-normal">Class</th>
-                {ARMOR_SLOTS.map((s) => (
-                  <th key={s} className="pb-1 text-right font-normal">
-                    {SLOT_LABELS[s]}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {classes.map((c) => {
-                const row = byClass.get(c)!;
-                return (
-                  <tr key={c} className="border-border/50 border-t">
-                    <td className="py-1">{CLASS_NAMES[c]}</td>
-                    {ARMOR_SLOTS.map((s) => (
-                      <td
-                        key={s}
-                        className="text-foreground py-1 text-right tabular-nums"
-                      >
-                        {row[s]}
-                      </td>
-                    ))}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      {!isLoading && (
+        <CardContent className="space-y-4">
+          {data && pieces.length > 0 && (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-muted-foreground text-left">
+                  <th className="pb-1 font-normal">Class</th>
+                  {ARMOR_SLOTS.map((s) => (
+                    <th key={s} className="pb-1 text-right font-normal">
+                      {SLOT_LABELS[s]}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {classes.map((c) => {
+                  const row = byClass.get(c)!;
+                  return (
+                    <tr key={c} className="border-border/50 border-t">
+                      <td className="py-1">{CLASS_NAMES[c]}</td>
+                      {ARMOR_SLOTS.map((s) => (
+                        <td
+                          key={s}
+                          className="text-foreground py-1 text-right tabular-nums"
+                        >
+                          {row[s]}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full"
+            disabled={isFetching || refreshSucceeded}
+            onClick={() => void handleRefresh()}
+          >
+            {isFetching ? (
+              <CircleNotch weight="duotone" className="animate-spin" aria-hidden />
+            ) : refreshSucceeded ? (
+              <CheckCircle weight="duotone" className="text-emerald-500" aria-hidden />
+            ) : (
+              <ArrowsClockwise weight="duotone" aria-hidden />
+            )}
+            {isFetching ? "Refreshing…" : refreshSucceeded ? "Refreshed" : "Refresh gear"}
+          </Button>
         </CardContent>
       )}
     </Card>

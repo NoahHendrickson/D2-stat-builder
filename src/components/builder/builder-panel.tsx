@@ -45,7 +45,7 @@ import { BuilderStatusCards } from "@/components/builder/builder-status-cards";
 import { ExoticPicker } from "@/components/builder/exotic-picker";
 import { FragmentPicker } from "@/components/builder/fragment-picker";
 import { ClassEmblemTabs } from "@/components/builder/class-emblem-tabs";
-import { BuildResults } from "@/components/builder/build-results";
+import { BuildResults, MAX_SHOWN } from "@/components/builder/build-results";
 import type { ExoticConstraint } from "@/lib/optimizer/types";
 import {
   loadSelections,
@@ -819,7 +819,7 @@ export function BuilderPanel({
                   : result
                     ? result.loadouts.length === 0
                       ? "No builds match"
-                      : `${result.combosValid.toLocaleString()} builds`
+                      : `${Math.min(MAX_SHOWN, result.loadouts.length).toLocaleString()} / ${result.combosValid.toLocaleString()}`
                     : ""}
             </span>
           </div>
