@@ -1,0 +1,51 @@
+import { test, expect } from "vitest";
+import {
+  emptyFilters,
+  hasActiveFilters,
+  pieceMatchesFilters,
+  type FilterablePiece,
+} from "./filters";
+import { tokenizeSearchQuery } from "./search";
+
+const piece = (overrides: Partial<FilterablePiece> = {}): FilterablePiece => ({
+  name: "Ferropotent Helm",
+  classType: 1,
+  slot: "helmet",
+  setHash: 42,
+  archetype: "Gunner",
+  tunedStat: 0,
+  ...overrides,
+});
+
+test("empty filters match everything", () => {
+  expect(hasActiveFilters(emptyFilters())).toBe(false);
+  expect(pieceMatchesFilters(piece(), 3, emptyFilters(), [])).toBe(true);
+});
+
+test("multi-select facets OR within and AND across", () => {
+  const f = { ...emptyFilters(), classes: [0, 1], archetypes: ["Gunner", "Brawler"] };
+  expect(pieceMatchesFilters(piece(), 3, f, [])).toBe(true); // Hunter + Gunner
+  expect(pieceMatchesFilters(piece({ classType: 2 }), 3, f, [])).toBe(false); // wrong class
+  expect(pieceMatchesFilters(piece({ archetype: "Paragon" }), 3, f, [])).toBe(false);
+});
+
+test("pieces missing a field fail that facet when it's active", () => {
+  const bySet = { ...emptyFilters(), setHashes: [42] };
+  expect(pieceMatchesFilters(piece({ setHash: undefined }), 3, bySet, [])).toBe(false);
+  const byTertiary = { ...emptyFilters(), tertiaries: [3] };
+  expect(pieceMatchesFilters(piece(), undefined, byTertiary, [])).toBe(false);
+});
+
+test('tuning facet: "none" matches untunable pieces, indices match tuned stats', () => {
+  const f = { ...emptyFilters(), tunings: ["none" as const, 2] };
+  expect(pieceMatchesFilters(piece({ tunedStat: undefined }), 3, f, [])).toBe(true);
+  expect(pieceMatchesFilters(piece({ tunedStat: 2 }), 3, f, [])).toBe(true);
+  expect(pieceMatchesFilters(piece({ tunedStat: 0 }), 3, f, [])).toBe(false);
+});
+
+test("search tokens AND with the other facets", () => {
+  const f = { ...emptyFilters(), classes: [1] };
+  const tokens = tokenizeSearchQuery("ferro smoke");
+  expect(pieceMatchesFilters(piece(), 3, f, tokens)).toBe(true);
+  expect(pieceMatchesFilters(piece({ name: "Iron Will Mask" }), 3, f, tokens)).toBe(false);
+});

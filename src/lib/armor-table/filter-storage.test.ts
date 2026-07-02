@@ -1,0 +1,95 @@
+import { beforeEach, test, expect } from "vitest";
+import { emptyFilters } from "./filters";
+import {
+  TABLE_SCHEMA_VERSION,
+  TABLE_STATE_KEY,
+  loadTableState,
+  saveTableState,
+  type PersistedTableState,
+} from "./filter-storage";
+
+/** Minimal in-memory Storage so the node test env can exercise load/save I/O. */
+class MemStorage {
+  private m = new Map<string, string>();
+  getItem(k: string) {
+    return this.m.has(k) ? this.m.get(k)! : null;
+  }
+  setItem(k: string, v: string) {
+    this.m.set(k, v);
+  }
+  removeItem(k: string) {
+    this.m.delete(k);
+  }
+  clear() {
+    this.m.clear();
+  }
+  key(i: number) {
+    return [...this.m.keys()][i] ?? null;
+  }
+  get length() {
+    return this.m.size;
+  }
+}
+
+beforeEach(() => {
+  (globalThis as { localStorage?: Storage }).localStorage =
+    new MemStorage() as unknown as Storage;
+});
+
+function sampleState(): PersistedTableState {
+  return {
+    version: TABLE_SCHEMA_VERSION,
+    filters: {
+      search: "ferro",
+      classes: [0, 2],
+      slots: ["helmet", "classItem"],
+      setHashes: [123456],
+      archetypes: ["Gunner"],
+      tunings: ["none", 4],
+      tertiaries: [3],
+    },
+    sort: { key: "stat-super", asc: false },
+  };
+}
+
+test("round-trips a full state", () => {
+  saveTableState(sampleState());
+  expect(loadTableState()).toEqual(sampleState());
+});
+
+test("returns null when absent, corrupt, or a different schema version", () => {
+  expect(loadTableState()).toBeNull();
+  localStorage.setItem(TABLE_STATE_KEY, "{not json");
+  expect(loadTableState()).toBeNull();
+  localStorage.setItem(
+    TABLE_STATE_KEY,
+    JSON.stringify({ ...sampleState(), version: TABLE_SCHEMA_VERSION + 1 }),
+  );
+  expect(loadTableState()).toBeNull();
+});
+
+test("drops invalid entries and falls back to defaults", () => {
+  localStorage.setItem(
+    TABLE_STATE_KEY,
+    JSON.stringify({
+      version: TABLE_SCHEMA_VERSION,
+      filters: {
+        search: 7, // wrong type
+        classes: [1, "x"],
+        slots: ["helmet", "belt"],
+        tunings: [2, "sometimes"],
+      },
+      sort: { key: "not-a-column", asc: true },
+    }),
+  );
+  expect(loadTableState()).toEqual({
+    version: TABLE_SCHEMA_VERSION,
+    filters: {
+      ...emptyFilters(),
+      classes: [1],
+      slots: ["helmet"],
+      tunings: [2],
+    },
+    sort: { key: "name", asc: true },
+  });
+});

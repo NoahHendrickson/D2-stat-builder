@@ -1,12 +1,20 @@
 "use client";
 
 import Image from "next/image";
-import { useMemo, useState } from "react";
+import {
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { CaretDown, CaretUp, MagnifyingGlass, X } from "@phosphor-icons/react";
 import { useArmory } from "@/lib/armory/use-armory";
 import { useManifest } from "@/lib/manifest/use-manifest";
 import { availableSets } from "@/lib/armory/sets";
 import type { ArmorPiece, ArmorLocation } from "@/lib/armory/normalize";
+import type { ArmoryCharacter } from "@/lib/armory/fetch";
 import { BUNGIE_IMAGE_BASE } from "@/lib/bungie/constants";
 import {
   ARMOR_SLOTS,
@@ -18,6 +26,23 @@ import {
   tertiaryStatIndex,
   type StatKey,
 } from "@/lib/armory/stats";
+import {
+  DEFAULT_SORT,
+  emptyFacets,
+  hasActiveFilters,
+  pieceMatchesFilters,
+  type ColumnKey,
+  type FacetFilters,
+  type SortKey,
+  type SortState,
+  type TuningFilter,
+} from "@/lib/armor-table/filters";
+import { tokenizeSearchQuery } from "@/lib/armor-table/search";
+import {
+  TABLE_SCHEMA_VERSION,
+  loadTableState,
+  saveTableState,
+} from "@/lib/armor-table/filter-storage";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,6 +54,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ArmorRowActions } from "@/components/armor-table/armor-row-actions";
 
 const LOCATION_LABELS: Record<ArmorLocation, string> = {
   equipped: "Equipped",
@@ -36,33 +62,34 @@ const LOCATION_LABELS: Record<ArmorLocation, string> = {
   vault: "Vault",
 };
 
-/** Sentinel filter values (real values are stringified hashes/indices/names). */
-const ALL = "all";
-const NOT_TUNABLE = "none";
+/** Approximate single-row height; the virtualizer remeasures real rows on mount. */
+const ESTIMATED_ROW_HEIGHT_PX = 38;
+
+const COLUMN_COUNT = 15;
+
+/** Fixed column widths keep the layout steady while rows virtualize in and out. */
+const TABLE_COLGROUP = (
+  <colgroup>
+    <col /* name */ />
+    <col style={{ width: "4.5rem" }} /* class */ />
+    <col style={{ width: "5rem" }} /* slot */ />
+    <col style={{ width: "6.5rem" }} /* archetype */ />
+    <col style={{ width: "5rem" }} /* tertiary */ />
+    <col style={{ width: "5rem" }} /* tuned */ />
+    <col style={{ width: "9.5rem" }} /* set */ />
+    {STAT_ORDER.map((key) => (
+      <col key={key} style={{ width: "3rem" }} />
+    ))}
+    <col style={{ width: "5.5rem" }} /* location */ />
+    <col style={{ width: "8rem" }} /* actions */ />
+  </colgroup>
+);
 
 interface Row {
   piece: ArmorPiece;
   setName?: string;
   /** Tertiary archetype stat index — Armor 3.0 pieces only. */
   tertiary?: number;
-}
-
-type ColumnKey =
-  | "name"
-  | "class"
-  | "slot"
-  | "archetype"
-  | "tertiary"
-  | "tuned"
-  | "set"
-  | "location";
-
-/** Stat columns are namespaced ("stat-class") so they can't collide with the class column. */
-type SortKey = ColumnKey | `stat-${StatKey}`;
-
-interface SortState {
-  key: SortKey;
-  asc: boolean;
 }
 
 const statLabel = (index: number) => STAT_LABELS[STAT_ORDER[index]];
@@ -112,30 +139,57 @@ function compareRows(a: Row, b: Row, sort: SortState): number {
   return sort.asc ? cmp : -cmp;
 }
 
-interface FilterOption {
-  value: string;
+interface FilterOption<V> {
+  value: V;
   label: string;
 }
 
-function FilterSelect({
-  ariaLabel,
+const MAX_SUMMARY_LABELS = 2;
+
+/** Trigger text: "All …" when nothing is selected, else "A, B +n". */
+function selectionSummary<V>(
+  selected: readonly V[] | null,
+  options: readonly FilterOption<V>[],
+  allLabel: string,
+) {
+  if (!selected || selected.length === 0) {
+    return <span className="text-muted-foreground">{allLabel}</span>;
+  }
+  const labels = selected.map(
+    (v) => options.find((o) => Object.is(o.value, v))?.label ?? String(v),
+  );
+  const shown = labels.slice(0, MAX_SUMMARY_LABELS).join(", ");
+  return labels.length > MAX_SUMMARY_LABELS
+    ? `${shown} +${labels.length - MAX_SUMMARY_LABELS}`
+    : shown;
+}
+
+function MultiFilterSelect<V>({
+  allLabel,
   value,
   onChange,
   options,
 }: {
-  ariaLabel: string;
-  value: string;
-  onChange: (value: string) => void;
-  options: FilterOption[];
+  allLabel: string;
+  value: V[];
+  onChange: (value: V[]) => void;
+  options: FilterOption<V>[];
 }) {
   return (
-    <Select value={value} onValueChange={(v) => onChange(v ?? ALL)} items={options}>
-      <SelectTrigger aria-label={ariaLabel} className="w-full">
-        <SelectValue />
+    <Select
+      multiple
+      value={value}
+      onValueChange={(v) => onChange(v ?? [])}
+      items={options}
+    >
+      <SelectTrigger aria-label={allLabel} className="w-full">
+        <SelectValue>
+          {(v: V[] | null) => selectionSummary(v, options, allLabel)}
+        </SelectValue>
       </SelectTrigger>
       <SelectContent>
         {options.map((opt) => (
-          <SelectItem key={opt.value} value={opt.value}>
+          <SelectItem key={String(opt.value)} value={opt.value}>
             {opt.label}
           </SelectItem>
         ))}
@@ -161,7 +215,7 @@ function SortHeader({
 }) {
   const active = sort.key === sortKey;
   return (
-    <th className="pb-1.5 font-normal whitespace-nowrap">
+    <th className="border-border/50 bg-background border-b pb-1.5 font-normal whitespace-nowrap">
       <button
         type="button"
         title={title}
@@ -188,21 +242,66 @@ function SortHeader({
 const DESC_FIRST = new Set<SortKey>(STAT_ORDER.map((key) => `stat-${key}` as const));
 
 export function ArmorTable() {
-  const { data } = useArmory();
+  const armory = useArmory();
   const manifestStatus = useManifest();
   const manifest =
     manifestStatus.state === "ready" ? manifestStatus.manifest : undefined;
 
-  const [query, setQuery] = useState("");
-  const [classFilter, setClassFilter] = useState(ALL);
-  const [slotFilter, setSlotFilter] = useState(ALL);
-  const [setFilter, setSetFilter] = useState(ALL);
-  const [archetypeFilter, setArchetypeFilter] = useState(ALL);
-  const [tuningFilter, setTuningFilter] = useState(ALL);
-  const [tertiaryFilter, setTertiaryFilter] = useState(ALL);
-  const [sort, setSort] = useState<SortState>({ key: "name", asc: true });
+  const [search, setSearch] = useState("");
+  const [facets, setFacets] = useState<FacetFilters>(emptyFacets);
+  const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const restored = useRef(false);
 
-  const pieces = data?.pieces;
+  // Restore the last session's filters + sort on mount (absent/corrupt → defaults).
+  useEffect(() => {
+    const saved = loadTableState();
+    if (saved) {
+      const { search: savedSearch, ...savedFacets } = saved.filters;
+      setSearch(savedSearch);
+      setFacets(savedFacets);
+      setSort(saved.sort);
+    }
+    restored.current = true;
+  }, []);
+
+  // Persist on change (debounced). The `restored` guard prevents the first render
+  // from clobbering stored data before the restore runs.
+  useEffect(() => {
+    if (!restored.current) return;
+    const t = window.setTimeout(() => {
+      saveTableState({
+        version: TABLE_SCHEMA_VERSION,
+        filters: { ...facets, search },
+        sort,
+      });
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [facets, search, sort]);
+
+  // Global "F" focuses search (ignored while typing in any field).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "f" && e.key !== "F") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.tagName === "SELECT" ||
+          t.isContentEditable)
+      )
+        return;
+      e.preventDefault();
+      searchRef.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const pieces = armory.data?.pieces;
+  const characters: ArmoryCharacter[] = armory.data?.characters ?? [];
 
   const rows = useMemo<Row[]>(() => {
     if (!pieces || !manifest) return [];
@@ -221,73 +320,52 @@ export function ArmorTable() {
     }));
   }, [pieces, manifest]);
 
-  const setOptions = useMemo<FilterOption[]>(() => {
+  const setOptions = useMemo<FilterOption<number>[]>(() => {
     const seen = new Map<number, string>();
     for (const r of rows) {
       if (r.piece.setHash && r.setName) seen.set(r.piece.setHash, r.setName);
     }
     return [...seen]
       .sort((a, b) => a[1].localeCompare(b[1]))
-      .map(([hash, name]) => ({ value: String(hash), label: name }));
+      .map(([hash, name]) => ({ value: hash, label: name }));
   }, [rows]);
 
-  const archetypeOptions = useMemo<FilterOption[]>(() => {
+  const archetypeOptions = useMemo<FilterOption<string>[]>(() => {
     const seen = new Set<string>();
     for (const r of rows) if (r.piece.archetype) seen.add(r.piece.archetype);
     return [...seen].sort().map((name) => ({ value: name, label: name }));
   }, [rows]);
 
-  const statOptions: FilterOption[] = STAT_DISPLAY_ORDER.map((key) => ({
-    value: String(STAT_ORDER.indexOf(key)),
+  const statOptions: FilterOption<number>[] = STAT_DISPLAY_ORDER.map((key) => ({
+    value: STAT_ORDER.indexOf(key),
     label: STAT_LABELS[key],
   }));
 
-  const q = query.trim().toLowerCase();
+  // Search is deferred so the filter pass can lag typing without blocking input.
+  const deferredSearch = useDeferredValue(search);
+  const searchTokens = useMemo(
+    () => tokenizeSearchQuery(deferredSearch),
+    [deferredSearch],
+  );
+
   const filtered = useMemo(() => {
-    const matches = rows.filter(
-      (r) =>
-        (!q || r.piece.name.toLowerCase().includes(q)) &&
-        (classFilter === ALL || r.piece.classType === Number(classFilter)) &&
-        (slotFilter === ALL || r.piece.slot === slotFilter) &&
-        (setFilter === ALL || String(r.piece.setHash) === setFilter) &&
-        (archetypeFilter === ALL || r.piece.archetype === archetypeFilter) &&
-        (tuningFilter === ALL ||
-          (tuningFilter === NOT_TUNABLE
-            ? r.piece.tunedStat === undefined
-            : r.piece.tunedStat === Number(tuningFilter))) &&
-        (tertiaryFilter === ALL || r.tertiary === Number(tertiaryFilter)),
+    const matches = rows.filter((r) =>
+      pieceMatchesFilters(r.piece, r.tertiary, facets, searchTokens),
     );
     return matches.sort((a, b) => compareRows(a, b, sort));
-  }, [
-    rows,
-    q,
-    classFilter,
-    slotFilter,
-    setFilter,
-    archetypeFilter,
-    tuningFilter,
-    tertiaryFilter,
-    sort,
-  ]);
+  }, [rows, facets, searchTokens, sort]);
 
-  const hasFilters =
-    q !== "" ||
-    classFilter !== ALL ||
-    slotFilter !== ALL ||
-    setFilter !== ALL ||
-    archetypeFilter !== ALL ||
-    tuningFilter !== ALL ||
-    tertiaryFilter !== ALL;
+  const filtersActive = hasActiveFilters({ ...facets, search });
 
   const clearFilters = () => {
-    setQuery("");
-    setClassFilter(ALL);
-    setSlotFilter(ALL);
-    setSetFilter(ALL);
-    setArchetypeFilter(ALL);
-    setTuningFilter(ALL);
-    setTertiaryFilter(ALL);
+    setSearch("");
+    setFacets(emptyFacets());
   };
+
+  const setFacet = <K extends keyof FacetFilters>(
+    key: K,
+    value: FacetFilters[K],
+  ) => setFacets((f) => ({ ...f, [key]: value }));
 
   const handleSort = (key: SortKey) =>
     setSort((prev) =>
@@ -296,8 +374,26 @@ export function ArmorTable() {
         : { key, asc: !DESC_FIRST.has(key) },
     );
 
+  // Virtualized rows: the scroller is the bounded-height container below.
+  const [scrollerEl, setScrollerEl] = useState<HTMLDivElement | null>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: filtered.length,
+    getScrollElement: () => scrollerEl,
+    estimateSize: () => ESTIMATED_ROW_HEIGHT_PX,
+    overscan: 10,
+  });
+  const virtualRows = rowVirtualizer.getVirtualItems();
+  const totalSize = rowVirtualizer.getTotalSize();
+  const paddingTop = virtualRows.length > 0 ? virtualRows[0].start : 0;
+  const paddingBottom =
+    virtualRows.length > 0
+      ? totalSize - virtualRows[virtualRows.length - 1].end
+      : 0;
+
+  const refresh = () => void armory.refetch();
+
   return (
-    <div className="space-y-3">
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-56 flex-1">
           <MagnifyingGlass
@@ -305,66 +401,59 @@ export function ArmorTable() {
             aria-hidden
           />
           <Input
+            ref={searchRef}
             type="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search armor by name"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== "Escape") return;
+              if (search) setSearch("");
+              else e.currentTarget.blur();
+            }}
+            placeholder="Press F to search"
             aria-label="Search armor by name"
             className="pl-8"
           />
         </div>
         <div className="grid w-full grid-cols-2 gap-2 sm:grid-cols-3 xl:flex xl:w-auto xl:*:w-40">
-          <FilterSelect
-            ariaLabel="Filter by class"
-            value={classFilter}
-            onChange={setClassFilter}
-            options={[
-              { value: ALL, label: "All classes" },
-              ...[0, 1, 2].map((c) => ({
-                value: String(c),
-                label: CLASS_NAMES[c],
-              })),
-            ]}
+          <MultiFilterSelect
+            allLabel="All classes"
+            value={facets.classes}
+            onChange={(v) => setFacet("classes", v)}
+            options={[0, 1, 2].map((c) => ({ value: c, label: CLASS_NAMES[c] }))}
           />
-          <FilterSelect
-            ariaLabel="Filter by armor slot"
-            value={slotFilter}
-            onChange={setSlotFilter}
-            options={[
-              { value: ALL, label: "All slots" },
-              ...ARMOR_SLOTS.map((s) => ({ value: s, label: SLOT_LABELS[s] })),
-            ]}
+          <MultiFilterSelect
+            allLabel="All slots"
+            value={facets.slots}
+            onChange={(v) => setFacet("slots", v)}
+            options={ARMOR_SLOTS.map((s) => ({ value: s, label: SLOT_LABELS[s] }))}
           />
-          <FilterSelect
-            ariaLabel="Filter by set bonus"
-            value={setFilter}
-            onChange={setSetFilter}
-            options={[{ value: ALL, label: "All sets" }, ...setOptions]}
+          <MultiFilterSelect
+            allLabel="All sets"
+            value={facets.setHashes}
+            onChange={(v) => setFacet("setHashes", v)}
+            options={setOptions}
           />
-          <FilterSelect
-            ariaLabel="Filter by archetype"
-            value={archetypeFilter}
-            onChange={setArchetypeFilter}
-            options={[
-              { value: ALL, label: "All archetypes" },
-              ...archetypeOptions,
-            ]}
+          <MultiFilterSelect
+            allLabel="All archetypes"
+            value={facets.archetypes}
+            onChange={(v) => setFacet("archetypes", v)}
+            options={archetypeOptions}
           />
-          <FilterSelect
-            ariaLabel="Filter by tuned stat"
-            value={tuningFilter}
-            onChange={setTuningFilter}
+          <MultiFilterSelect<TuningFilter>
+            allLabel="Any tuning"
+            value={facets.tunings}
+            onChange={(v) => setFacet("tunings", v)}
             options={[
-              { value: ALL, label: "Any tuning" },
               ...statOptions,
-              { value: NOT_TUNABLE, label: "Not tunable" },
+              { value: "none" as const, label: "Not tunable" },
             ]}
           />
-          <FilterSelect
-            ariaLabel="Filter by tertiary stat"
-            value={tertiaryFilter}
-            onChange={setTertiaryFilter}
-            options={[{ value: ALL, label: "Any tertiary" }, ...statOptions]}
+          <MultiFilterSelect
+            allLabel="Any tertiary"
+            value={facets.tertiaries}
+            onChange={(v) => setFacet("tertiaries", v)}
+            options={statOptions}
           />
         </div>
       </div>
@@ -373,7 +462,7 @@ export function ArmorTable() {
         <span className="tabular-nums">
           {filtered.length} of {rows.length} pieces
         </span>
-        {hasFilters && (
+        {filtersActive && (
           <Button
             variant="ghost"
             size="sm"
@@ -386,9 +475,10 @@ export function ArmorTable() {
         )}
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
+      <div ref={setScrollerEl} className="min-h-0 flex-1 overflow-auto">
+        <table className="w-full min-w-[78rem] table-fixed text-sm">
+          {TABLE_COLGROUP}
+          <thead className="bg-background sticky top-0 z-10">
             <tr className="text-muted-foreground text-left text-xs">
               <SortHeader label="Name" sortKey="name" sort={sort} onSort={handleSort} />
               <SortHeader label="Class" sortKey="class" sort={sort} onSort={handleSort} />
@@ -409,12 +499,35 @@ export function ArmorTable() {
                 />
               ))}
               <SortHeader label="Location" sortKey="location" sort={sort} onSort={handleSort} />
+              <th className="border-border/50 bg-background border-b pb-1.5 text-left font-normal">
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody>
-            {filtered.map((row) => (
-              <ArmorRow key={row.piece.instanceId} row={row} />
-            ))}
+            {paddingTop > 0 && (
+              <tr aria-hidden>
+                <td colSpan={COLUMN_COUNT} style={{ height: paddingTop }} />
+              </tr>
+            )}
+            {virtualRows.map((vRow) => {
+              const row = filtered[vRow.index];
+              return (
+                <ArmorRow
+                  key={row.piece.instanceId}
+                  row={row}
+                  characters={characters}
+                  onRefresh={refresh}
+                  dataIndex={vRow.index}
+                  measureRef={rowVirtualizer.measureElement}
+                />
+              );
+            })}
+            {paddingBottom > 0 && (
+              <tr aria-hidden>
+                <td colSpan={COLUMN_COUNT} style={{ height: paddingBottom }} />
+              </tr>
+            )}
           </tbody>
         </table>
         {filtered.length === 0 && (
@@ -429,11 +542,27 @@ export function ArmorTable() {
   );
 }
 
-function ArmorRow({ row }: { row: Row }) {
+function ArmorRow({
+  row,
+  characters,
+  onRefresh,
+  dataIndex,
+  measureRef,
+}: {
+  row: Row;
+  characters: ArmoryCharacter[];
+  onRefresh: () => void;
+  dataIndex: number;
+  measureRef: (el: HTMLTableRowElement | null) => void;
+}) {
   const { piece } = row;
   return (
-    <tr className="border-border/50 border-t">
-      <td className="max-w-64 py-1.5 pr-3">
+    <tr
+      ref={measureRef}
+      data-index={dataIndex}
+      className="border-border/50 border-t"
+    >
+      <td className="overflow-hidden py-1.5 pr-3">
         <div className="flex items-center gap-2">
           {piece.icon ? (
             <Image
@@ -463,21 +592,28 @@ function ArmorRow({ row }: { row: Row }) {
         {CLASS_NAMES[piece.classType] ?? "—"}
       </td>
       <td className="py-1.5 pr-3 whitespace-nowrap">{SLOT_LABELS[piece.slot]}</td>
-      <td className="py-1.5 pr-3 whitespace-nowrap">{piece.archetype ?? "—"}</td>
+      <td className="truncate py-1.5 pr-3">{piece.archetype ?? "—"}</td>
       <td className="py-1.5 pr-3 whitespace-nowrap">
         {row.tertiary !== undefined ? statLabel(row.tertiary) : "—"}
       </td>
       <td className="py-1.5 pr-3 whitespace-nowrap">
         {piece.tunedStat !== undefined ? statLabel(piece.tunedStat) : "—"}
       </td>
-      <td className="max-w-40 truncate py-1.5 pr-3">{row.setName ?? "—"}</td>
+      <td className="truncate py-1.5 pr-3">{row.setName ?? "—"}</td>
       {STAT_DISPLAY_ORDER.map((key) => (
         <td key={key} className="py-1.5 pr-3 text-right tabular-nums">
           {piece.stats[STAT_ORDER.indexOf(key)]}
         </td>
       ))}
-      <td className="text-muted-foreground py-1.5 whitespace-nowrap">
+      <td className="text-muted-foreground py-1.5 pr-3 whitespace-nowrap">
         {LOCATION_LABELS[piece.location]}
+      </td>
+      <td className="py-1.5">
+        <ArmorRowActions
+          piece={piece}
+          characters={characters}
+          onDone={onRefresh}
+        />
       </td>
     </tr>
   );
