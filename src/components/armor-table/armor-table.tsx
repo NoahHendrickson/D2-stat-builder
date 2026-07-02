@@ -10,7 +10,6 @@ import {
 } from "react";
 import Image from "next/image";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { CaretDown, CaretUp } from "@phosphor-icons/react";
 import { BUNGIE_IMAGE_BASE } from "@/lib/bungie/constants";
 import { useArmory } from "@/lib/armory/use-armory";
 import { useManifest } from "@/lib/manifest/use-manifest";
@@ -30,10 +29,8 @@ import {
   hasActiveFilters,
   pieceMatchesFilters,
   type FacetFilters,
-  type SortKey,
-  type SortState,
 } from "@/lib/armor-table/filters";
-import { DESC_FIRST, compareRows } from "@/lib/armor-table/sort";
+import { compareRows } from "@/lib/armor-table/sort";
 import { tokenizeSearchQuery } from "@/lib/armor-table/search";
 import {
   TABLE_SCHEMA_VERSION,
@@ -62,35 +59,24 @@ const ESTIMATED_ROW_HEIGHT_PX = 38;
 const TABLE_HEAD_CELL =
   "border-border/50 border-b bg-muted py-2.5 pr-3 text-sm font-medium whitespace-nowrap first:pl-3";
 
-function SortHeader({
+function TableHeader({
   label,
   icon,
-  sortKey,
-  sort,
-  onSort,
   align = "left",
   title,
 }: {
   label: string;
   icon?: string;
-  sortKey: SortKey;
-  sort: SortState;
-  onSort: (key: SortKey) => void;
   align?: "left" | "right";
   title?: string;
 }) {
-  const active = sort.key === sortKey;
   const accessibleLabel = title ?? label;
   return (
     <th className={TABLE_HEAD_CELL}>
-      <button
-        type="button"
-        title={accessibleLabel}
-        onClick={() => onSort(sortKey)}
+      <span
         className={cn(
-          "hover:text-foreground -my-0.5 inline-flex items-center gap-0.5 transition-colors",
+          "-my-0.5 inline-flex items-center gap-0.5",
           align === "right" && "w-full justify-end",
-          active && "text-foreground",
         )}
       >
         {icon ? (
@@ -105,13 +91,7 @@ function SortHeader({
         ) : (
           label
         )}
-        {active &&
-          (sort.asc ? (
-            <CaretUp weight="bold" className="size-3" aria-hidden />
-          ) : (
-            <CaretDown weight="bold" className="size-3" aria-hidden />
-          ))}
-      </button>
+      </span>
     </th>
   );
 }
@@ -124,21 +104,18 @@ export function ArmorTable() {
 
   const [search, setSearch] = useState("");
   const [facets, setFacets] = useState<FacetFilters>(emptyFacets);
-  const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
   const [pinnedSets, setPinnedSets] = useState<number[]>([]);
   const [pinnedArchetypes, setPinnedArchetypes] = useState<string[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
   const restored = useRef(false);
 
-  // Restore the last session's filters + sort + pins on mount (absent/corrupt
-  // → defaults).
+  // Restore the last session's filters + pins on mount (absent/corrupt → defaults).
   useEffect(() => {
     const saved = loadTableState();
     if (saved) {
       const { search: savedSearch, ...savedFacets } = saved.filters;
       setSearch(savedSearch);
       setFacets(savedFacets);
-      setSort(saved.sort);
     }
     const savedPins = loadTablePins();
     if (savedPins) {
@@ -156,11 +133,11 @@ export function ArmorTable() {
       saveTableState({
         version: TABLE_SCHEMA_VERSION,
         filters: { ...facets, search },
-        sort,
+        sort: DEFAULT_SORT,
       });
     }, 300);
     return () => window.clearTimeout(t);
-  }, [facets, search, sort]);
+  }, [facets, search]);
 
   // Pins persist debounced like the filters above — the delay also keeps the
   // initial empty state from clobbering stored pins before the restore's
@@ -263,8 +240,8 @@ export function ArmorTable() {
     const matches = rows.filter((r) =>
       pieceMatchesFilters(r.piece, r.tertiary, facets, searchTokens),
     );
-    return matches.sort((a, b) => compareRows(a, b, sort));
-  }, [rows, facets, searchTokens, sort]);
+    return matches.sort((a, b) => compareRows(a, b, DEFAULT_SORT));
+  }, [rows, facets, searchTokens]);
 
   const filtersActive = hasActiveFilters({ ...facets, search });
 
@@ -283,13 +260,6 @@ export function ArmorTable() {
 
   const togglePinnedArchetype = (name: string) =>
     setPinnedArchetypes((prev) => togglePinned(prev, name));
-
-  const handleSort = (key: SortKey) =>
-    setSort((prev) =>
-      prev.key === key
-        ? { key, asc: !prev.asc }
-        : { key, asc: !DESC_FIRST.has(key) },
-    );
 
   // Virtualized rows: the scroller is the bounded-height container below.
   const [scrollerEl, setScrollerEl] = useState<HTMLDivElement | null>(null);
@@ -332,7 +302,6 @@ export function ArmorTable() {
             onTogglePinnedSet={togglePinnedSet}
             onTogglePinnedArchetype={togglePinnedArchetype}
             filteredCount={filtered.length}
-            totalCount={rows.length}
             filtersActive={filtersActive}
             onClearFilters={clearFilters}
           />
@@ -342,21 +311,18 @@ export function ArmorTable() {
             {TABLE_COLGROUP}
             <thead className="bg-muted sticky top-0 z-10">
               <tr className="text-muted-foreground text-left">
-                <SortHeader label="Name" sortKey="name" sort={sort} onSort={handleSort} />
-                <SortHeader label="Class" sortKey="class" sort={sort} onSort={handleSort} />
-                <SortHeader label="Archetype" sortKey="archetype" sort={sort} onSort={handleSort} />
-                <SortHeader label="Tertiary" sortKey="tertiary" sort={sort} onSort={handleSort} />
-                <SortHeader label="Tuned" sortKey="tuned" sort={sort} onSort={handleSort} />
-                <SortHeader label="Set bonus" sortKey="set" sort={sort} onSort={handleSort} />
+                <TableHeader label="Name" />
+                <TableHeader label="Class" />
+                <TableHeader label="Archetype" />
+                <TableHeader label="Tertiary" />
+                <TableHeader label="Tuned" />
+                <TableHeader label="Set bonus" />
                 {STAT_DISPLAY_ORDER.map((key) => (
-                  <SortHeader
+                  <TableHeader
                     key={key}
                     label={STAT_LABELS[key]}
                     icon={statIcons[key]}
                     title={STAT_LABELS[key]}
-                    sortKey={`stat-${key}`}
-                    sort={sort}
-                    onSort={handleSort}
                     align="right"
                   />
                 ))}

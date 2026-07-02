@@ -73,11 +73,6 @@ export const ArmorRow = memo(function ArmorRow({
             <span className="bg-muted size-6 shrink-0 rounded-sm" aria-hidden />
           )}
           <span className="truncate font-medium">{piece.name}</span>
-          {piece.isExotic && (
-            <Badge variant="secondary" className="px-1 py-0 text-[10px]">
-              Exotic
-            </Badge>
-          )}
           {piece.isArtifice && (
             <Badge variant="outline" className="px-1 py-0 text-[10px]">
               Artifice
