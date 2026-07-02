@@ -39,7 +39,6 @@ import {
 } from "@/lib/armory/stats";
 import { Slider, sliderEdgeAlignedLeft } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import {
   field3dFocusVisibleClasses,
   field3dSurfaceClasses,
@@ -56,7 +55,8 @@ import { ManifestStatus } from "@/components/manifest/manifest-status";
 import { ExoticPicker } from "@/components/builder/exotic-picker";
 import { FragmentPicker } from "@/components/builder/fragment-picker";
 import { ClassEmblemTabs } from "@/components/builder/class-emblem-tabs";
-import { BuildResults, MAX_SHOWN } from "@/components/builder/build-results";
+import { BuildsSurface } from "@/components/builder/builds-surface";
+import type { BuildsColumnContentProps } from "@/components/builder/builds-column-content";
 import type { ExoticConstraint } from "@/lib/optimizer/types";
 import {
   loadSelections,
@@ -81,7 +81,6 @@ const MAX_MODS = 5;
 const STAT_TARGET_TICKS = [0, 50, 100, 150, 200] as const;
 const STAT_SLIDER_MAX = STAT_TARGET_TICKS[STAT_TARGET_TICKS.length - 1];
 /** Skeleton rows shown while a search is in flight. */
-const LOADING_ROWS = 5;
 
 /**
  * Smooths the worker's raw progress into a fluid displayed value. A rAF loop eases the
@@ -629,6 +628,47 @@ export function BuilderPanel({
     );
   };
 
+  const buildsProps: BuildsColumnContentProps = useMemo(
+    () => ({
+      ready,
+      showLoading,
+      running,
+      result,
+      displayedProgress,
+      onCancel: cancel,
+      pieceMap,
+      targets,
+      setMap,
+      statIcons,
+      balancedTuningIcon,
+      characters: armory?.characters ?? [],
+      statModHashes,
+      tuningPlugHashes,
+      artificeModHashes,
+      subclass: dimSubclass,
+      onEquipped: () => void armoryQuery.refetch(),
+    }),
+    [
+      ready,
+      showLoading,
+      running,
+      result,
+      displayedProgress,
+      cancel,
+      pieceMap,
+      targets,
+      setMap,
+      statIcons,
+      balancedTuningIcon,
+      armory?.characters,
+      statModHashes,
+      tuningPlugHashes,
+      artificeModHashes,
+      dimSubclass,
+      armoryQuery,
+    ],
+  );
+
   return (
     <div className="grid grid-cols-1 gap-8 lg:grid-cols-2 lg:items-start lg:gap-12">
       {/* Left — configure the build */}
@@ -658,7 +698,7 @@ export function BuilderPanel({
                   return (
                     <div
                       key={key}
-                      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1"
+                      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 max-lg:gap-x-2"
                     >
                       {icon ? (
                         <Image
@@ -849,7 +889,8 @@ export function BuilderPanel({
                         : "No sets to show."}
                 </p>
               ) : (
-                <div className="grid grid-cols-[minmax(0,1.4fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5">
+                <div className="max-lg:overflow-x-auto">
+                <div className="grid grid-cols-[minmax(0,1.4fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5 max-lg:min-w-[36rem]">
                   <span aria-hidden />
                   <span className="text-muted-foreground col-span-2 text-sm">
                     2pc
@@ -865,6 +906,7 @@ export function BuilderPanel({
                     />
                   )}
                   {unpinnedList.map(renderSetRow)}
+                </div>
                 </div>
               )}
             </Section>
@@ -937,102 +979,7 @@ export function BuilderPanel({
         </div>
       </div>
 
-      {/* Right — generated builds */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-lg font-medium">Builds</h2>
-          <div className="flex items-center gap-3">
-            {running && (
-              <Button
-                variant="link"
-                onClick={cancel}
-                className="text-muted-foreground hover:text-foreground h-auto p-0 text-xs font-normal"
-              >
-                Cancel
-              </Button>
-            )}
-            <span
-              className="text-muted-foreground text-sm tabular-nums"
-              aria-live="polite"
-            >
-              {!ready
-                ? ""
-                : showLoading
-                  ? "Searching…"
-                  : result
-                    ? result.loadouts.length === 0
-                      ? "No builds match"
-                      : `${Math.min(MAX_SHOWN, result.loadouts.length).toLocaleString()} / ${result.combosValid.toLocaleString()}`
-                    : ""}
-            </span>
-          </div>
-        </div>
-        {!ready ? (
-          <p className="text-muted-foreground text-sm">
-            Sign in and load your gear to generate builds.
-          </p>
-        ) : showLoading ? (
-          <BuildsLoading progress={displayedProgress} />
-        ) : result ? (
-          <BuildResults
-            result={result}
-            pieceMap={pieceMap}
-            targets={targets}
-            setMap={setMap}
-            statIcons={statIcons}
-            balancedTuningIcon={balancedTuningIcon}
-            characters={armory?.characters ?? []}
-            statModHashes={statModHashes}
-            tuningPlugHashes={tuningPlugHashes}
-            artificeModHashes={artificeModHashes}
-            subclass={dimSubclass}
-            onEquipped={() => void armoryQuery.refetch()}
-          />
-        ) : (
-          <p className="text-muted-foreground text-sm">
-            Pick an exotic, set bonuses, and stat targets — builds update as you go.
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/** In-place loading state for the results column: a progress bar over pulsing skeleton rows. */
-function BuildsLoading({ progress }: { progress: number }) {
-  return (
-    <div className="space-y-3">
-      <div
-        role="progressbar"
-        aria-label="Search progress"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.round(progress * 100)}
-        className="bg-muted h-1 w-full overflow-hidden rounded-full"
-      >
-        <div
-          className="bg-primary h-full rounded-full"
-          style={{ width: `${progress * 100}%` }}
-        />
-      </div>
-      <div className="space-y-1.5">
-        {Array.from({ length: LOADING_ROWS }, (_, i) => (
-          <div
-            key={i}
-            className="border-border/60 flex animate-pulse items-center gap-3 rounded-lg border p-2.5"
-            style={{ animationDelay: `${i * 120}ms` }}
-            aria-hidden
-          >
-            <span className="bg-muted size-7 shrink-0 rounded" />
-            <div className="flex flex-1 items-center gap-3">
-              {Array.from({ length: 6 }, (_, j) => (
-                <span key={j} className="bg-muted h-3.5 w-10 rounded" />
-              ))}
-            </div>
-            <span className="bg-muted h-3.5 w-8 shrink-0 rounded" />
-          </div>
-        ))}
-      </div>
+      <BuildsSurface {...buildsProps} />
     </div>
   );
 }

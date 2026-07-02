@@ -223,7 +223,7 @@ function BuildRow({
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="hover:bg-muted/40 flex w-full items-center gap-3 p-2.5 text-left transition-colors"
+        className="hover:bg-muted/40 flex w-full items-center gap-3 p-2.5 text-left transition-colors max-lg:gap-2"
       >
         {exotic?.icon ? (
           <Image
@@ -237,7 +237,7 @@ function BuildRow({
         ) : (
           <span className="bg-muted size-7 shrink-0 rounded" aria-hidden />
         )}
-        <div className="flex flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+        <div className="flex flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-sm max-lg:gap-x-2">
           {STAT_COLS.map(({ key, i }) => {
             const met = targets[i] > 0 && loadout.stats[i] >= targets[i];
             return (
@@ -257,7 +257,7 @@ function BuildRow({
           <Badge
             key={b.name}
             variant="secondary"
-            className="shrink-0 px-1.5 py-0 text-[10px]"
+            className="max-lg:hidden shrink-0 px-1.5 py-0 text-[10px]"
             title={b.name}
           >
             {b.count}pc
