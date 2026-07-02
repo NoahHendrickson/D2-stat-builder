@@ -37,7 +37,7 @@ export function BuilderPageShell() {
 
   if (wide) {
     return (
-      <div className="mx-auto flex max-w-[calc(80rem+22rem+2rem)] gap-8 px-6 py-6">
+      <div className="mx-auto flex max-w-[calc(80rem+22rem+2rem)] gap-8 px-4 py-6 pb-24 lg:px-6 lg:pb-6">
         <aside className="w-[22rem] shrink-0 self-start">
           <div className="sticky top-[58px] opacity-80">
             <ArmoryStatus />
@@ -51,7 +51,7 @@ export function BuilderPageShell() {
   }
 
   return (
-    <main className="mx-auto max-w-7xl px-6 py-6">
+    <main className="mx-auto max-w-7xl px-4 py-6 pb-24 lg:px-6 lg:pb-6">
       <BuilderPanel showInlineStatusCards />
     </main>
   );
