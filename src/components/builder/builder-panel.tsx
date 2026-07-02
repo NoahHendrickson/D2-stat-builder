@@ -9,12 +9,18 @@ import {
   type ReactNode,
 } from "react";
 import Image from "next/image";
-import { MagnifyingGlass, PushPin } from "@phosphor-icons/react";
+import { MagnifyingGlass, PushPin, SlidersHorizontal } from "@phosphor-icons/react";
 import { useSession } from "@/lib/auth/use-session";
 import { useArmory } from "@/lib/armory/use-armory";
 import { useManifest } from "@/lib/manifest/use-manifest";
 import { useOptimizer } from "@/lib/optimizer/use-optimizer";
 import { availableSets } from "@/lib/armory/sets";
+import {
+  DEFAULT_SET_FILTERS,
+  hasCustomSetFilters,
+  passesSetFilters,
+  type SetFilters,
+} from "@/lib/armory/set-filters";
 import {
   availableFragments,
   SUBCLASSES,
@@ -37,6 +43,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { BUNGIE_IMAGE_BASE } from "@/lib/bungie/constants";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SignInCard } from "@/components/auth/sign-in-card";
@@ -152,7 +159,10 @@ export function BuilderPanel({
   const [major, setMajor] = useState(0);
   const [setReqs, setSetReqs] = useState<Record<number, 2 | 4>>({});
   const [pinnedSets, setPinnedSets] = useState<number[]>([]);
+  const [hoveredSetHash, setHoveredSetHash] = useState<number | null>(null);
+  const setRowRefs = useRef(new Map<number, HTMLDivElement>());
   const [setQuery, setSetQuery] = useState("");
+  const [setFilters, setSetFilters] = useState<SetFilters>(DEFAULT_SET_FILTERS);
   const [selectedExotic, setSelectedExotic] = useState<number | null>(null);
   const [allowTuning, setAllowTuning] = useState(true);
   const [activeSubclass, setActiveSubclass] = useState<Subclass>("Prismatic");
@@ -180,6 +190,7 @@ export function BuilderPanel({
       setMajor(saved.major);
       setSetReqs(saved.setReqs);
       setPinnedSets(saved.pinnedSets);
+      setSetFilters(saved.setFilters);
       setAllowTuning(saved.allowTuning);
       setActiveSubclass(saved.activeSubclass);
       setFragSel(fragSelFromArrays(saved.fragSel));
@@ -236,13 +247,59 @@ export function BuilderPanel({
   // Both groups are narrowed by the search query (case-insensitive substring).
   const { pinnedList, unpinnedList } = useMemo(() => {
     const q = setQuery.trim().toLowerCase();
-    const shown = q ? sets.filter((s) => s.name.toLowerCase().includes(q)) : sets;
+    const shown = sets.filter((s) => {
+      if (q && !s.name.toLowerCase().includes(q)) return false;
+      return passesSetFilters(s.ownedCount, setFilters);
+    });
     const pinned = new Set(pinnedSets);
     return {
       pinnedList: shown.filter((s) => pinned.has(s.setHash)),
       unpinnedList: shown.filter((s) => !pinned.has(s.setHash)),
     };
-  }, [sets, pinnedSets, setQuery]);
+  }, [sets, pinnedSets, setQuery, setFilters]);
+
+  const customSetFilters = hasCustomSetFilters(setFilters);
+
+  const visibleSetRows =
+    sets.length > 0 && (pinnedList.length > 0 || unpinnedList.length > 0);
+
+  const registerSetRowRef = useCallback(
+    (setHash: number, el: HTMLDivElement | null) => {
+      if (el) setRowRefs.current.set(setHash, el);
+      else setRowRefs.current.delete(setHash);
+    },
+    [],
+  );
+
+  // Reveal the pin when the pointer is vertically aligned with a row, even far to its left
+  // (e.g. over the status sidebar or panel padding while moving toward the set list).
+  useEffect(() => {
+    if (!visibleSetRows) {
+      setHoveredSetHash(null);
+      return;
+    }
+
+    const updateHover = (clientY: number, clientX: number) => {
+      for (const [hash, el] of setRowRefs.current) {
+        const { top, bottom, right } = el.getBoundingClientRect();
+        if (clientY >= top && clientY <= bottom && clientX <= right) {
+          setHoveredSetHash((prev) => (prev === hash ? prev : hash));
+          return;
+        }
+      }
+      setHoveredSetHash((prev) => (prev === null ? prev : null));
+    };
+
+    const onMouseMove = (e: MouseEvent) => updateHover(e.clientY, e.clientX);
+    const onMouseLeave = () => setHoveredSetHash(null);
+
+    window.addEventListener("mousemove", onMouseMove);
+    document.documentElement.addEventListener("mouseleave", onMouseLeave);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      document.documentElement.removeEventListener("mouseleave", onMouseLeave);
+    };
+  }, [visibleSetRows]);
 
   // After a restore (or a class correction), drop set requirements for sets the player no
   // longer owns — an unowned requirement would make every build infeasible.
@@ -371,6 +428,7 @@ export function BuilderPanel({
         major,
         setReqs,
         pinnedSets,
+        setFilters,
         exoticName:
           selectedExotic === null ? null : (exotics[selectedExotic]?.name ?? null),
         allowTuning,
@@ -385,6 +443,7 @@ export function BuilderPanel({
     major,
     setReqs,
     pinnedSets,
+    setFilters,
     selectedExotic,
     exotics,
     allowTuning,
@@ -457,6 +516,9 @@ export function BuilderPanel({
     setSelectedExotic(null);
   };
 
+  const setSetFilter = (key: keyof SetFilters, value: boolean) =>
+    setSetFilters((prev) => ({ ...prev, [key]: value }));
+
   const toggleSet = (setHash: number, count: 2 | 4) =>
     setSetReqs((prev) => {
       const next = { ...prev };
@@ -474,14 +536,16 @@ export function BuilderPanel({
 
   const renderSetRow = (s: (typeof sets)[number]) => {
     const pinned = pinnedSets.includes(s.setHash);
+    const pinVisible = pinned || hoveredSetHash === s.setHash;
     const perk2 = s.perks.find((p) => p.requiredCount === 2)?.name;
     const perk4 = s.perks.find((p) => p.requiredCount === 4)?.name;
     return (
       <div
         key={s.setHash}
-        className="group col-span-full grid grid-cols-subgrid items-center"
+        ref={(el) => registerSetRowRef(s.setHash, el)}
+        className="col-span-full grid grid-cols-subgrid items-center"
       >
-        <span className="flex min-w-0 items-center gap-1.5 text-xs">
+        <span className="flex min-w-0 items-center gap-1.5 text-sm">
           <button
             type="button"
             onClick={() => togglePin(s.setHash)}
@@ -490,7 +554,10 @@ export function BuilderPanel({
               "shrink-0 transition-opacity focus-visible:opacity-100",
               pinned
                 ? "text-foreground"
-                : "text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100",
+                : cn(
+                    "text-muted-foreground hover:text-foreground",
+                    pinVisible ? "opacity-100" : "opacity-0",
+                  ),
             )}
           >
             <PushPin
@@ -514,7 +581,7 @@ export function BuilderPanel({
           disabled={s.ownedCount < 2}
           onClick={() => toggleSet(s.setHash, 2)}
           className={cn(
-            "text-muted-foreground min-w-0 truncate text-left text-xs disabled:cursor-not-allowed disabled:opacity-50",
+            "text-muted-foreground min-w-0 truncate text-left text-sm disabled:cursor-not-allowed disabled:opacity-50",
             s.ownedCount >= 2 && "cursor-pointer hover:text-foreground",
           )}
           title={perk2}
@@ -531,7 +598,7 @@ export function BuilderPanel({
           disabled={s.ownedCount < 4}
           onClick={() => toggleSet(s.setHash, 4)}
           className={cn(
-            "text-muted-foreground min-w-0 truncate text-left text-xs disabled:cursor-not-allowed disabled:opacity-50",
+            "text-muted-foreground min-w-0 truncate text-left text-sm disabled:cursor-not-allowed disabled:opacity-50",
             s.ownedCount >= 4 && "cursor-pointer hover:text-foreground",
           )}
           title={perk4}
@@ -698,19 +765,55 @@ export function BuilderPanel({
             </Section>
 
             <Section>
-              <div className="relative">
-                <MagnifyingGlass
-                  className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2"
-                  aria-hidden
-                />
-                <Input
-                  type="search"
-                  value={setQuery}
-                  onChange={(e) => setSetQuery(e.target.value)}
-                  placeholder="Find armor sets"
-                  aria-label="Find armor sets"
-                  className="pl-8"
-                />
+              <div className="flex items-center gap-2">
+                <div className="relative min-w-0 flex-1">
+                  <MagnifyingGlass
+                    className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2"
+                    aria-hidden
+                  />
+                  <Input
+                    type="search"
+                    value={setQuery}
+                    onChange={(e) => setSetQuery(e.target.value)}
+                    placeholder="Find armor sets"
+                    aria-label="Find armor sets"
+                    className="pl-8"
+                  />
+                </div>
+                <div className="shrink-0">
+                  <Popover>
+                    <PopoverTrigger
+                      render={
+                        <Button
+                          variant="outlineSubtle"
+                          size="icon"
+                          aria-label="Armor set list settings"
+                          className="rounded-lg before:rounded-lg after:rounded-lg"
+                        />
+                      }
+                    >
+                      <SlidersHorizontal className="size-4" aria-hidden />
+                    </PopoverTrigger>
+                    <PopoverContent align="end" className="space-y-0.5">
+                      <SetListSettingRow
+                        checked={setFilters.hideZero}
+                        onCheckedChange={(checked) =>
+                          setSetFilter("hideZero", checked)
+                        }
+                      >
+                        Hide sets I have 0 pieces for
+                      </SetListSettingRow>
+                      <SetListSettingRow
+                        checked={setFilters.hideLessThan2}
+                        onCheckedChange={(checked) =>
+                          setSetFilter("hideLessThan2", checked)
+                        }
+                      >
+                        Hide sets I have less than 2 pieces for
+                      </SetListSettingRow>
+                    </PopoverContent>
+                  </Popover>
+                </div>
               </div>
               {sets.length === 0 ? (
                 <p className="text-muted-foreground text-xs">
@@ -718,15 +821,21 @@ export function BuilderPanel({
                 </p>
               ) : pinnedList.length === 0 && unpinnedList.length === 0 ? (
                 <p className="text-muted-foreground text-xs">
-                  No sets match &ldquo;{setQuery.trim()}&rdquo;.
+                  {setQuery.trim() && customSetFilters
+                    ? `No sets match "${setQuery.trim()}" with the current settings.`
+                    : setQuery.trim()
+                      ? `No sets match "${setQuery.trim()}".`
+                      : customSetFilters
+                        ? "No sets match the current settings."
+                        : "No sets to show."}
                 </p>
               ) : (
-                <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5">
+                <div className="grid grid-cols-[minmax(0,1.4fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5">
                   <span aria-hidden />
-                  <span className="text-muted-foreground col-span-2 text-xs">
+                  <span className="text-muted-foreground col-span-2 text-sm">
                     2pc
                   </span>
-                  <span className="text-muted-foreground col-span-2 text-xs">
+                  <span className="text-muted-foreground col-span-2 text-sm">
                     4pc
                   </span>
                   {pinnedList.map(renderSetRow)}
@@ -888,6 +997,28 @@ function BuildsLoading({ progress }: { progress: number }) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function SetListSettingRow({
+  checked,
+  onCheckedChange,
+  children,
+}: {
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+  children: ReactNode;
+}) {
+  const label = typeof children === "string" ? children : undefined;
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5">
+      <span className="text-sm leading-snug">{children}</span>
+      <Switch
+        checked={checked}
+        onCheckedChange={onCheckedChange}
+        aria-label={label}
+      />
     </div>
   );
 }

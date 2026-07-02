@@ -110,7 +110,7 @@
   --foreground: oklch(0.93 0 0);
   --card: oklch(0.25 0 0);
   --card-foreground: oklch(0.93 0 0);
-  --popover: oklch(0.25 0 0);
+  --popover: oklch(0.21 0 0);
   --popover-foreground: oklch(0.93 0 0);
   --primary: #438eff;
   --primary-foreground: #ffffff;

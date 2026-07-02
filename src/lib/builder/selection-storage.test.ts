@@ -1,5 +1,6 @@
 import { beforeEach, test, expect } from "vitest";
 import { SUBCLASSES, type Subclass } from "../armory/fragments";
+import { DEFAULT_SET_FILTERS } from "../armory/set-filters";
 import {
   SELECTIONS_KEY,
   SCHEMA_VERSION,
@@ -57,6 +58,7 @@ function sampleSelections(): PersistedSelections {
     major: 3,
     setReqs: { 987654: 4, 123456: 2 },
     pinnedSets: [123456, 555],
+    setFilters: { ...DEFAULT_SET_FILTERS, hideZero: false },
     exoticName: "Gyrfalcon's Hauberk",
     allowTuning: true,
     activeSubclass: "Void",
@@ -90,6 +92,45 @@ test("load defaults pinnedSets to [] for data stored before the field existed", 
   delete old.pinnedSets;
   localStorage.setItem(SELECTIONS_KEY, JSON.stringify(old));
   expect(loadSelections()).toEqual({ ...old, pinnedSets: [] });
+});
+
+test("load defaults setFilters for data stored before the field existed", () => {
+  const old: Partial<PersistedSelections> = sampleSelections();
+  delete old.setFilters;
+  localStorage.setItem(SELECTIONS_KEY, JSON.stringify(old));
+  expect(loadSelections()).toEqual({ ...old, setFilters: DEFAULT_SET_FILTERS });
+});
+
+test("load upgrades legacy all-false hide toggles to new defaults", () => {
+  const old = sampleSelections();
+  localStorage.setItem(
+    SELECTIONS_KEY,
+    JSON.stringify({
+      ...old,
+      setFilters: {
+        only4pc: false,
+        only2pc: false,
+        hideLessThan2: false,
+        hideZero: false,
+      },
+    }),
+  );
+  expect(loadSelections()?.setFilters).toEqual(DEFAULT_SET_FILTERS);
+});
+
+test("load preserves explicit hide choices in the new two-toggle schema", () => {
+  const old = sampleSelections();
+  localStorage.setItem(
+    SELECTIONS_KEY,
+    JSON.stringify({
+      ...old,
+      setFilters: { hideZero: false, hideLessThan2: true },
+    }),
+  );
+  expect(loadSelections()?.setFilters).toEqual({
+    hideZero: false,
+    hideLessThan2: true,
+  });
 });
 
 test("load returns null when the shape is malformed (targets wrong length)", () => {

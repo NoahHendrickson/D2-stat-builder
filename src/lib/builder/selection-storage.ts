@@ -6,6 +6,7 @@
 // Runtime imports are relative (not `@/`) — the vitest runner has no `@/` alias, matching
 // the convention in normalize.ts / solve.ts.
 import { SUBCLASSES, type Subclass } from "../armory/fragments";
+import { DEFAULT_SET_FILTERS, type SetFilters } from "../armory/set-filters";
 
 export const SELECTIONS_KEY = "stat-builder:selections";
 export const SCHEMA_VERSION = 1;
@@ -23,6 +24,8 @@ export interface PersistedSelections {
   setReqs: Record<number, 2 | 4>;
   /** Set hashes pinned to the top of the set-bonus list, in pin order. */
   pinnedSets: number[];
+  /** Armor-set list display settings (ownership / piece-count toggles). */
+  setFilters: SetFilters;
   exoticName: string | null;
   allowTuning: boolean;
   activeSubclass: Subclass;
@@ -75,6 +78,33 @@ function storage(): Storage | undefined {
 
 const SUBCLASS_SET = new Set<string>(SUBCLASSES);
 
+function parseSetFilters(v: unknown): SetFilters {
+  if (typeof v !== "object" || v === null) return DEFAULT_SET_FILTERS;
+  const raw = v as Record<string, unknown>;
+  const isLegacyShape = "only2pc" in raw || "only4pc" in raw;
+
+  // Blobs from the old four-toggle schema auto-saved all-false defaults on every
+  // debounced write — not an intentional user choice. Upgrade to the new defaults.
+  if (
+    isLegacyShape &&
+    raw.hideZero === false &&
+    raw.hideLessThan2 === false
+  ) {
+    return DEFAULT_SET_FILTERS;
+  }
+
+  return {
+    hideLessThan2:
+      typeof raw.hideLessThan2 === "boolean"
+        ? raw.hideLessThan2
+        : DEFAULT_SET_FILTERS.hideLessThan2,
+    hideZero:
+      typeof raw.hideZero === "boolean"
+        ? raw.hideZero
+        : DEFAULT_SET_FILTERS.hideZero,
+  };
+}
+
 /** Parse + validate a stored string. Returns null on any malformed / stale / corrupt input. */
 function parse(raw: string | null): PersistedSelections | null {
   if (!raw) return null;
@@ -101,6 +131,7 @@ function parse(raw: string | null): PersistedSelections | null {
   const pinnedSets = Array.isArray(o.pinnedSets)
     ? o.pinnedSets.filter((n): n is number => typeof n === "number")
     : [];
+  const setFilters = parseSetFilters(o.setFilters);
   if (!(typeof o.exoticName === "string" || o.exoticName === null)) return null;
   if (typeof o.allowTuning !== "boolean") return null;
   if (typeof o.activeSubclass !== "string" || !SUBCLASS_SET.has(o.activeSubclass))
@@ -125,6 +156,7 @@ function parse(raw: string | null): PersistedSelections | null {
     major: o.major as number,
     setReqs: o.setReqs as Record<number, 2 | 4>,
     pinnedSets,
+    setFilters,
     exoticName: o.exoticName as string | null,
     allowTuning: o.allowTuning as boolean,
     activeSubclass: o.activeSubclass as Subclass,
