@@ -84,8 +84,6 @@ export interface BuildsColumnContentProps {
   artificeModHashes: (number | undefined)[] | null;
   subclass?: DimSubclassInput;
   onEquipped: () => void;
-  /** When true, omit the section heading (e.g. sheet provides its own title). */
-  hideTitle?: boolean;
 }
 
 export function BuildsColumnContent({
@@ -106,36 +104,14 @@ export function BuildsColumnContent({
   artificeModHashes,
   subclass,
   onEquipped,
-  hideTitle = false,
 }: BuildsColumnContentProps) {
   const statusLabel = getBuildsStatusLabel({ ready, showLoading, result });
 
   return (
     <div className="space-y-3">
-      {!hideTitle && (
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-lg font-medium">Builds</h2>
-          <div className="flex items-center gap-3">
-            {running && (
-              <Button
-                variant="link"
-                onClick={onCancel}
-                className="text-muted-foreground hover:text-foreground h-auto p-0 text-xs font-normal"
-              >
-                Cancel
-              </Button>
-            )}
-            <span
-              className="text-muted-foreground text-sm tabular-nums"
-              aria-live="polite"
-            >
-              {statusLabel}
-            </span>
-          </div>
-        </div>
-      )}
-      {hideTitle && (
-        <div className="flex items-center justify-end gap-3">
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="text-lg font-medium">Builds</h2>
+        <div className="flex items-center gap-3">
           {running && (
             <Button
               variant="link"
@@ -145,16 +121,14 @@ export function BuildsColumnContent({
               Cancel
             </Button>
           )}
-          {statusLabel ? (
-            <span
-              className="text-muted-foreground text-sm tabular-nums"
-              aria-live="polite"
-            >
-              {statusLabel}
-            </span>
-          ) : null}
+          <span
+            className="text-muted-foreground text-sm tabular-nums"
+            aria-live="polite"
+          >
+            {statusLabel}
+          </span>
         </div>
-      )}
+      </div>
       {!ready ? (
         <p className="text-muted-foreground text-sm">
           Sign in and load your gear to generate builds.

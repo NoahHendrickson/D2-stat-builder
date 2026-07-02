@@ -55,15 +55,8 @@ import { ManifestStatus } from "@/components/manifest/manifest-status";
 import { ExoticPicker } from "@/components/builder/exotic-picker";
 import { FragmentPicker } from "@/components/builder/fragment-picker";
 import { ClassEmblemTabs } from "@/components/builder/class-emblem-tabs";
-import { BuildsColumnContent } from "@/components/builder/builds-column-content";
-import { BuildsMobileBar } from "@/components/builder/builds-mobile-bar";
-import {
-  Sheet,
-  SheetBody,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { BuildsSurface } from "@/components/builder/builds-surface";
+import type { BuildsColumnContentProps } from "@/components/builder/builds-column-content";
 import type { ExoticConstraint } from "@/lib/optimizer/types";
 import {
   loadSelections,
@@ -189,7 +182,6 @@ export function BuilderPanel({
   // Legacy EXOTICS are supported (the solver spends their artifice +3); legacy
   // legendaries are not yet — that toggle stays disabled.
   const [useLegacyExotics, setUseLegacyExotics] = useState(true);
-  const [sheetOpen, setSheetOpen] = useState(false);
 
   // Persistence guards: `restored` stops the save effect from writing defaults over stored
   // data before the restore runs; `pendingExoticName` hands the restored exotic (persisted by
@@ -636,6 +628,47 @@ export function BuilderPanel({
     );
   };
 
+  const buildsProps: BuildsColumnContentProps = useMemo(
+    () => ({
+      ready,
+      showLoading,
+      running,
+      result,
+      displayedProgress,
+      onCancel: cancel,
+      pieceMap,
+      targets,
+      setMap,
+      statIcons,
+      balancedTuningIcon,
+      characters: armory?.characters ?? [],
+      statModHashes,
+      tuningPlugHashes,
+      artificeModHashes,
+      subclass: dimSubclass,
+      onEquipped: () => void armoryQuery.refetch(),
+    }),
+    [
+      ready,
+      showLoading,
+      running,
+      result,
+      displayedProgress,
+      cancel,
+      pieceMap,
+      targets,
+      setMap,
+      statIcons,
+      balancedTuningIcon,
+      armory?.characters,
+      statModHashes,
+      tuningPlugHashes,
+      artificeModHashes,
+      dimSubclass,
+      armoryQuery,
+    ],
+  );
+
   return (
     <div className="grid grid-cols-1 gap-8 lg:grid-cols-2 lg:items-start lg:gap-12">
       {/* Left — configure the build */}
@@ -946,75 +979,7 @@ export function BuilderPanel({
         </div>
       </div>
 
-      {/* Right — generated builds (desktop) */}
-      <div className="hidden space-y-3 lg:block">
-        <BuildsColumnContent
-          ready={ready}
-          showLoading={showLoading}
-          running={running}
-          result={result}
-          displayedProgress={displayedProgress}
-          onCancel={cancel}
-          pieceMap={pieceMap}
-          targets={targets}
-          setMap={setMap}
-          statIcons={statIcons}
-          balancedTuningIcon={balancedTuningIcon}
-          characters={armory?.characters ?? []}
-          statModHashes={statModHashes}
-          tuningPlugHashes={tuningPlugHashes}
-          artificeModHashes={artificeModHashes}
-          subclass={dimSubclass}
-          onEquipped={() => void armoryQuery.refetch()}
-        />
-      </div>
-
-      {ready && (
-        <>
-          <BuildsMobileBar
-            ready={ready}
-            showLoading={showLoading}
-            running={running}
-            result={result}
-            displayedProgress={displayedProgress}
-            open={sheetOpen}
-            onOpen={() => setSheetOpen(true)}
-          />
-          <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-            <SheetContent
-              id="builds-mobile-sheet"
-              side="bottom"
-              className="gap-0 p-0"
-            >
-              <SheetHeader className="border-border/60 border-b">
-                <SheetTitle>Builds</SheetTitle>
-              </SheetHeader>
-              <SheetBody>
-                <BuildsColumnContent
-                  ready={ready}
-                  showLoading={showLoading}
-                  running={running}
-                  result={result}
-                  displayedProgress={displayedProgress}
-                  onCancel={cancel}
-                  pieceMap={pieceMap}
-                  targets={targets}
-                  setMap={setMap}
-                  statIcons={statIcons}
-                  balancedTuningIcon={balancedTuningIcon}
-                  characters={armory?.characters ?? []}
-                  statModHashes={statModHashes}
-                  tuningPlugHashes={tuningPlugHashes}
-                  artificeModHashes={artificeModHashes}
-                  subclass={dimSubclass}
-                  onEquipped={() => void armoryQuery.refetch()}
-                  hideTitle
-                />
-              </SheetBody>
-            </SheetContent>
-          </Sheet>
-        </>
-      )}
+      <BuildsSurface {...buildsProps} />
     </div>
   );
 }
