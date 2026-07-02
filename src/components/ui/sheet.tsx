@@ -16,33 +16,30 @@ const SWIPE_DIRECTION = {
   right: "right",
 } as const satisfies Record<SheetSide, DrawerPrimitive.Root.Props["swipeDirection"]>;
 
-type SheetContextValue = Pick<
-  DrawerPrimitive.Root.Props,
-  "open" | "onOpenChange" | "defaultOpen"
->;
+const SheetSideContext = React.createContext<SheetSide>("bottom");
 
-const SheetContext = React.createContext<SheetContextValue | null>(null);
-
-function useSheetContext() {
-  const context = React.useContext(SheetContext);
-  if (!context) {
-    throw new Error("Sheet components must be used within a Sheet.");
-  }
-  return context;
+function useSheetSide() {
+  return React.useContext(SheetSideContext);
 }
 
 function Sheet({
-  open,
-  onOpenChange,
-  defaultOpen,
+  side = "bottom",
   children,
-}: SheetContextValue & {
+  ...props
+}: Omit<DrawerPrimitive.Root.Props, "children" | "swipeDirection"> & {
+  side?: SheetSide;
   children: React.ReactNode;
 }) {
   return (
-    <SheetContext.Provider value={{ open, onOpenChange, defaultOpen }}>
-      {children}
-    </SheetContext.Provider>
+    <SheetSideContext.Provider value={side}>
+      <DrawerPrimitive.Root
+        data-slot="sheet"
+        swipeDirection={SWIPE_DIRECTION[side]}
+        {...props}
+      >
+        {children}
+      </DrawerPrimitive.Root>
+    </SheetSideContext.Provider>
   );
 }
 
@@ -93,63 +90,52 @@ const popupClassNames: Record<SheetSide, string> = {
 function SheetContent({
   className,
   children,
-  side = "bottom",
   showCloseButton = true,
   ...props
 }: DrawerPrimitive.Popup.Props & {
-  side?: SheetSide;
   showCloseButton?: boolean;
 }) {
-  const { open, onOpenChange, defaultOpen } = useSheetContext();
+  const side = useSheetSide();
 
   return (
-    <DrawerPrimitive.Root
-      data-slot="sheet"
-      open={open}
-      onOpenChange={onOpenChange}
-      defaultOpen={defaultOpen}
-      swipeDirection={SWIPE_DIRECTION[side]}
-    >
-      <SheetPortal>
-        <SheetOverlay />
-        <DrawerPrimitive.Viewport className={viewportClassNames[side]}>
-          <DrawerPrimitive.Popup
-            data-slot="sheet-content"
-            className={cn(
-              "relative z-50 flex flex-col bg-popover text-popover-foreground ring-1 ring-foreground/10 outline-none data-open:animate-in data-closed:animate-out",
-              popupClassNames[side],
-              className,
-            )}
-            {...props}
-          >
-            {side === "bottom" && (
-              <div
-                className="mx-auto mt-2 mb-1 h-1 w-10 shrink-0 rounded-full bg-muted-foreground/30"
-                aria-hidden
-              />
-            )}
-            <DrawerPrimitive.Content className="flex min-h-0 flex-1 flex-col">
-              {children}
-            </DrawerPrimitive.Content>
-            {showCloseButton && (
-              <DrawerPrimitive.Close
-                data-slot="sheet-close"
-                render={
-                  <Button
-                    variant="ghost"
-                    className="absolute top-3 right-3"
-                    size="icon-sm"
-                  />
-                }
-              >
-                <X weight="bold" className="size-4" />
-                <span className="sr-only">Close</span>
-              </DrawerPrimitive.Close>
-            )}
-          </DrawerPrimitive.Popup>
-        </DrawerPrimitive.Viewport>
-      </SheetPortal>
-    </DrawerPrimitive.Root>
+    <SheetPortal>
+      <SheetOverlay />
+      <DrawerPrimitive.Viewport className={viewportClassNames[side]}>
+        <DrawerPrimitive.Popup
+          data-slot="sheet-content"
+          className={cn(
+            "relative z-50 flex flex-col bg-popover text-popover-foreground ring-1 ring-foreground/10 outline-none data-open:animate-in data-closed:animate-out",
+            popupClassNames[side],
+            className,
+          )}
+          {...props}
+        >
+          {side === "bottom" && (
+            <div
+              className="mx-auto mt-2 mb-1 h-1 w-10 shrink-0 rounded-full bg-muted-foreground/30"
+              aria-hidden
+            />
+          )}
+          <DrawerPrimitive.Content className="flex min-h-0 flex-1 flex-col">
+            {children}
+          </DrawerPrimitive.Content>
+          {showCloseButton && (
+            <SheetClose
+              render={
+                <Button
+                  variant="ghost"
+                  className="absolute top-3 right-3"
+                  size="icon-sm"
+                />
+              }
+            >
+              <X weight="bold" className="size-4" />
+              <span className="sr-only">Close</span>
+            </SheetClose>
+          )}
+        </DrawerPrimitive.Popup>
+      </DrawerPrimitive.Viewport>
+    </SheetPortal>
   );
 }
 
