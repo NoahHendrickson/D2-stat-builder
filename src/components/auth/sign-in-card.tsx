@@ -44,10 +44,14 @@ export function SignInCard() {
       <CardContent>
         {authed ? (
           <Button
-            render={<a href="/api/auth/logout" />}
             variant="outline"
             size="lg"
             className="w-full"
+            onClick={async () => {
+              // POST, not a GET link — the logout route is POST-only to avoid CSRF.
+              await fetch("/api/auth/logout", { method: "POST" });
+              window.location.assign("/");
+            }}
           >
             Sign out
           </Button>
