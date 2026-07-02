@@ -4,6 +4,7 @@ import type {
 } from "bungie-api-ts/destiny2";
 import type { Manifest } from "@/lib/manifest/load";
 import {
+  ARMOR_ARCHETYPE_PLUG_CATEGORY,
   ARMOR_BUCKETS,
   ARTIFICE_PERK_HASH,
   MASTERWORK_OFF_STAT_BONUS,
@@ -35,6 +36,8 @@ export interface ArmorPiece {
   /** Artifice armor — has a free +3 stat mod slot (common on Armor 2.0 pieces + exotics). */
   isArtifice: boolean;
   setHash?: number;
+  /** Archetype plug name (e.g. "Gunner") — Armor 3.0 only; undefined on legacy pieces. */
+  archetype?: string;
   /** True base roll: intrinsic stat plugs only — no mods, masterwork, or tuning. */
   baseStats: StatArray;
   /**
@@ -178,6 +181,25 @@ function intrinsicStats(
   return out;
 }
 
+/** The name of the piece's archetype plug (Armor 3.0), or undefined on legacy pieces. */
+function archetypeName(
+  instanceId: string,
+  profile: DestinyProfileResponse,
+  manifest: Manifest,
+): string | undefined {
+  const sockets = profile.itemComponents?.sockets?.data?.[instanceId]?.sockets;
+  if (!sockets) return undefined;
+  for (const socket of sockets) {
+    if (!socket.plugHash) continue;
+    const plug = manifest.def("DestinyInventoryItemDefinition", socket.plugHash);
+    const cat = plug?.plug?.plugCategoryIdentifier;
+    if (cat?.includes(ARMOR_ARCHETYPE_PLUG_CATEGORY)) {
+      return plug?.displayProperties?.name || undefined;
+    }
+  }
+  return undefined;
+}
+
 /** A piece is artifice if it carries the artifice intrinsic perk. */
 function isArtificePiece(
   instanceId: string,
@@ -225,6 +247,7 @@ function buildPiece(
     isExotic: def.inventory?.tierType === TIER_TYPE_EXOTIC,
     isArtifice: isArtificePiece(item.itemInstanceId, profile),
     setHash: def.equippingBlock?.equipableItemSetHash || undefined,
+    archetype: archetypeName(item.itemInstanceId, profile, manifest),
     baseStats,
     stats,
     tunedStat,

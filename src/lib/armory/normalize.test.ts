@@ -157,6 +157,67 @@ test("a Tier-5 exotic's def-level intrinsic stats are added to stats, not baseSt
   expect(lp.stats).toEqual([30, 5, 20, 5, 25, 5]);
 });
 
+test("the archetype plug's name is captured; pieces without one get undefined", () => {
+  const ITEM = 777;
+  const ARCH_PLUG = 333;
+  const cur = {
+    [H.weapons]: 30,
+    [H.health]: 0,
+    [H.class]: 0,
+    [H.grenade]: 20,
+    [H.super]: 25,
+    [H.melee]: 0,
+  };
+  const defs: Record<number, object> = {
+    [ITEM]: {
+      itemType: 2, // armor
+      classType: 0,
+      displayProperties: { name: "Collective Psyche Helm" },
+      inventory: { bucketTypeHash: 3448274439, tierType: 5 }, // helmet, legendary
+    },
+    [ARCH_PLUG]: {
+      plug: {
+        plugCategoryIdentifier:
+          "core.gear_systems.armor_tiering.plugs.armor_archetypes",
+      },
+      displayProperties: { name: "Gunner" },
+    },
+  };
+  const manifest = {
+    def: (_table: string, hash: number | null | undefined) =>
+      hash == null ? undefined : defs[hash],
+  } as unknown as Manifest;
+  const profile = {
+    itemComponents: {
+      stats: {
+        data: {
+          a1: {
+            stats: Object.fromEntries(
+              Object.entries(cur).map(([h, v]) => [h, { value: v }]),
+            ),
+          },
+        },
+      },
+      sockets: { data: { a1: { sockets: [{ plugHash: ARCH_PLUG }] } } },
+    },
+    profileInventory: {
+      data: { items: [{ itemInstanceId: "a1", itemHash: ITEM }] },
+    },
+  } as unknown as DestinyProfileResponse;
+
+  expect(normalizeArmory(profile, manifest)[0].archetype).toBe("Gunner");
+
+  // A legacy piece with no archetype plug in its sockets → undefined.
+  const legacy = {
+    ...profile,
+    itemComponents: {
+      ...(profile as { itemComponents: object }).itemComponents,
+      sockets: { data: { a1: { sockets: [] } } },
+    },
+  } as unknown as DestinyProfileResponse;
+  expect(normalizeArmory(legacy, manifest)[0].archetype).toBeUndefined();
+});
+
 test("a directional tune (with a −5) is reversed in full on the stats it names", () => {
   // Current reflects a +5 weapons / −5 health directional over base [25, 10, 5, 20, 25, 5].
   const cur = {

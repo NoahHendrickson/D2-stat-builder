@@ -52,6 +52,9 @@ export const STAT_HASH_TO_INDEX: Record<number, number> = Object.fromEntries(
 /** Plug category identifier for the intrinsic armor stat-roll plugs (the true base roll). */
 export const ARMOR_STATS_PLUG_CATEGORY = "armor_stats";
 
+/** Plug category identifier for the archetype plug on Armor 3.0 pieces (e.g. "Gunner"). */
+export const ARMOR_ARCHETYPE_PLUG_CATEGORY = "armor_archetypes";
+
 /** Masterwork (MW5) adds +5 to each of the 3 off-archetype stats. Archetype stats (30/25/20 on T5) are fixed and unaffected. */
 export const MASTERWORK_OFF_STAT_BONUS = 5;
 
@@ -91,6 +94,15 @@ export function offArchetypeIndices(base: StatArray): number[] {
     .map((_, i) => i)
     .sort((a, b) => base[a] - base[b])
     .slice(0, 3);
+}
+
+/**
+ * The tertiary archetype stat index = the 3rd-highest base-roll stat (fixed at 20
+ * on Tier 5). Complement of offArchetypeIndices; ties resolve in STAT_ORDER order
+ * (stable sort). Only meaningful for Armor 3.0 pieces with a real archetype shape.
+ */
+export function tertiaryStatIndex(base: StatArray): number {
+  return base.map((_, i) => i).sort((a, b) => base[b] - base[a])[2];
 }
 
 /** Armor inventory bucket hash -> slot. */

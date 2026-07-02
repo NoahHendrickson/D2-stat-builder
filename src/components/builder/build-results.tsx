@@ -25,6 +25,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { BUNGIE_IMAGE_BASE } from "@/lib/bungie/constants";
+import {
+  equipItemRef,
+  lastPlayedCharacter,
+  postEquipRequest,
+} from "@/lib/bungie/equip-client";
 import type {
   AppliedTuning,
   OptimizerLoadout,
@@ -351,13 +356,6 @@ function BuildRow({
   );
 }
 
-/** Per-item outcome from POST /api/bungie/equip. */
-interface EquipResult {
-  itemInstanceId: string;
-  ok: boolean;
-  message?: string;
-}
-
 /**
  * Footer of an expanded build: hand the build to DIM's loadout editor, or pull
  * the pieces to a character and equip them. Both need every piece still present
@@ -387,9 +385,7 @@ function BuildActions({
   const resolved = pieces.filter((p): p is ArmorPiece => p !== undefined);
   const complete = resolved.length === loadout.pieceIds.length;
   const buildClass = resolved[0]?.classType;
-  const targetCharacter = characters
-    .filter((c) => c.classType === buildClass)
-    .sort((a, b) => Date.parse(b.dateLastPlayed) - Date.parse(a.dateLastPlayed))[0];
+  const targetCharacter = lastPlayedCharacter(characters, buildClass);
 
   const missingTitle = complete
     ? undefined
@@ -428,36 +424,16 @@ function BuildActions({
     if (!complete || !targetCharacter || equipping) return;
     setEquipping(true);
     try {
-      const res = await fetch("/api/bungie/equip", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const results = await postEquipRequest(
+        {
           characterId: targetCharacter.id,
-          items: resolved.map((p) => ({
-            itemInstanceId: p.instanceId,
-            itemHash: p.itemHash,
-            location: p.location,
-            characterId: p.characterId,
-          })),
-        }),
-      });
-      const data = (await res.json()) as {
-        results?: EquipResult[];
-        error?: string;
-        reauth?: boolean;
-      };
+          items: resolved.map(equipItemRef),
+        },
+        { queryClient, failureMessage: "Equip failed" },
+      );
+      if (!results) return;
 
-      if (!res.ok) {
-        toast.error(data.error ?? "Equip failed");
-        // The server cleared the stale (pre-scope or expired) session; surfacing
-        // the session query brings back the sign-in card.
-        if (data.reauth) {
-          void queryClient.invalidateQueries({ queryKey: ["session"] });
-        }
-        return;
-      }
-
-      const failed = (data.results ?? []).filter((r) => !r.ok);
+      const failed = results.filter((r) => !r.ok);
       if (failed.length === 0) {
         toast.success(
           `Equipped on your ${CLASS_NAMES[buildClass ?? -1] ?? "character"}`,

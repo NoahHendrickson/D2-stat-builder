@@ -27,6 +27,8 @@ const SUCCESS = 1;
 interface EquipRequestBody {
   characterId: string;
   items: EquipItemState[];
+  /** "move" stages the items on the character without equipping. Default "equip". */
+  mode?: "move" | "equip";
 }
 
 interface ItemResult {
@@ -50,7 +52,8 @@ function parseBody(body: unknown): EquipRequestBody | null {
         !i.itemInstanceId ||
         typeof i.itemHash !== "number" ||
         (i.characterId !== undefined && typeof i.characterId !== "string"),
-    )
+    ) ||
+    (b.mode !== undefined && b.mode !== "move" && b.mode !== "equip")
   ) {
     return null;
   }
@@ -121,12 +124,17 @@ export async function POST(request: Request) {
       await sleep(ACTION_SPACING_MS);
     }
 
-    // Batch-equip whatever made it onto the character.
     const stagedIds = items
       .map((i) => i.itemInstanceId)
       .filter((id) => !failed.has(id));
     const results: ItemResult[] = [];
-    if (stagedIds.length > 0) {
+    if (body.mode === "move") {
+      // Move-only: transfers are the whole job — staged items succeeded.
+      for (const id of stagedIds) {
+        results.push({ itemInstanceId: id, ok: true });
+      }
+    } else if (stagedIds.length > 0) {
+      // Batch-equip whatever made it onto the character.
       const res = await equipItems(http, {
         itemIds: stagedIds,
         characterId,
