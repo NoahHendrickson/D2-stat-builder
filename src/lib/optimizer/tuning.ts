@@ -45,6 +45,24 @@ export interface InternalPiece {
   tuneTotalUpside: number;
 }
 
+/**
+ * Points needed to close deficit `d` in a joint-feasibility bound. Stat mods come in
+ * 5-point grains, so the deficit rounds up — unless free artifice (+3) mods are
+ * reachable, which break the grain; then the raw deficit is the only admissible bound.
+ * Every joint prune (searcher, top-N, ceiling probes) must use this one definition.
+ */
+export const deficitPoints = (d: number, artificeReachable: boolean): number =>
+  artificeReachable ? d : Math.ceil(d / 5) * 5;
+
+/**
+ * Shared results for the overwhelmingly common zero-artifice leaf (every all-Tier-5
+ * loadout hits assignMods/settleLeaf once per combo, so the zero path must stay
+ * allocation-free). Consumers treat outcome arrays as immutable — never write into
+ * these. (Worker results are structured-cloned before the UI sees them.)
+ */
+const ZERO_ARTIFICE_POINTS: number[] = [0, 0, 0, 0, 0, 0];
+const NO_ARTIFICE_SLOTS: (number | null)[] = [null, null, null, null, null];
+
 function statTotal(stats: number[]): number {
   let t = 0;
   for (let i = 0; i < NUM_STATS; i++) t += stats[i];
@@ -116,21 +134,36 @@ export function makeInternalPiece(
 }
 
 /**
- * Cheapest assignment of major (+10) / minor (+5) stat mods covering every stat's
- * deficit within the budget. Returns per-stat points + counts, or null if infeasible.
+ * Cheapest assignment of major (+10) / minor (+5) stat mods — plus free artifice (+3)
+ * mods from artifice pieces — covering every stat's deficit within the budgets.
+ * Covering prefers majors, then minors, then artifice: an artifice mod left unspent
+ * here is worth a full +3 to the maximize dump, while a stat mod left unspent is worth
+ * nothing (mods are only ever socketed to cover targets). Returns per-stat mod points,
+ * artifice points, and counts, or null if infeasible.
  */
 export function assignMods(
   deficits: number[],
   maxMajor: number,
   maxMinor: number,
-): { points: number[]; usedMajor: number; usedMinor: number } | null {
+  maxArtifice = 0,
+): {
+  points: number[];
+  usedMajor: number;
+  usedMinor: number;
+  artificePoints: number[];
+  usedArtifice: number;
+} | null {
   const major = new Array(NUM_STATS).fill(0);
   const minor = new Array(NUM_STATS).fill(0);
 
-  const rec = (s: number, majorsLeft: number, minorsLeft: number): boolean => {
+  // Zero-artifice recursion, kept as a separate loop shape on purpose: it runs once
+  // per enumerated combo (the solver's hottest call), so it must cost exactly what it
+  // did before artifice existed. The three-resource variant below is the same search
+  // with the artifice dimension added — a fix to one covering rule belongs in BOTH.
+  const rec2 = (s: number, majorsLeft: number, minorsLeft: number): boolean => {
     if (s === NUM_STATS) return true;
     const need = deficits[s];
-    if (need <= 0) return rec(s + 1, majorsLeft, minorsLeft);
+    if (need <= 0) return rec2(s + 1, majorsLeft, minorsLeft);
     const maxA = Math.min(majorsLeft, Math.ceil(need / 10));
     for (let a = maxA; a >= 0; a--) {
       const remainder = need - a * 10;
@@ -138,19 +171,64 @@ export function assignMods(
       if (b > minorsLeft) continue;
       major[s] = a;
       minor[s] = b;
-      if (rec(s + 1, majorsLeft - a, minorsLeft - b)) return true;
+      if (rec2(s + 1, majorsLeft - a, minorsLeft - b)) return true;
     }
     major[s] = 0;
     minor[s] = 0;
     return false;
   };
 
-  if (!rec(0, maxMajor, maxMinor)) return null;
-  const points = major.map((a, i) => a * 10 + minor[i] * 5);
+  if (maxArtifice === 0) {
+    if (!rec2(0, maxMajor, maxMinor)) return null;
+    return {
+      points: major.map((a, i) => a * 10 + minor[i] * 5),
+      usedMajor: major.reduce((x, y) => x + y, 0),
+      usedMinor: minor.reduce((x, y) => x + y, 0),
+      artificePoints: ZERO_ARTIFICE_POINTS, // shared — treated as immutable
+      usedArtifice: 0,
+    };
+  }
+
+  const artifice = new Array(NUM_STATS).fill(0);
+  const rec3 = (
+    s: number,
+    majorsLeft: number,
+    minorsLeft: number,
+    artLeft: number,
+  ): boolean => {
+    if (s === NUM_STATS) return true;
+    const need = deficits[s];
+    if (need <= 0) return rec3(s + 1, majorsLeft, minorsLeft, artLeft);
+    const maxA = Math.min(majorsLeft, Math.ceil(need / 10));
+    for (let a = maxA; a >= 0; a--) {
+      const afterMajor = need - a * 10;
+      const maxC = Math.min(
+        artLeft,
+        afterMajor > 0 ? Math.ceil(afterMajor / 3) : 0,
+      );
+      for (let c = 0; c <= maxC; c++) {
+        const remainder = afterMajor - c * 3;
+        const b = remainder > 0 ? Math.ceil(remainder / 5) : 0;
+        if (b > minorsLeft) continue;
+        major[s] = a;
+        minor[s] = b;
+        artifice[s] = c;
+        if (rec3(s + 1, majorsLeft - a, minorsLeft - b, artLeft - c)) return true;
+      }
+    }
+    major[s] = 0;
+    minor[s] = 0;
+    artifice[s] = 0;
+    return false;
+  };
+
+  if (!rec3(0, maxMajor, maxMinor, maxArtifice)) return null;
   return {
-    points,
+    points: major.map((a, i) => a * 10 + minor[i] * 5),
     usedMajor: major.reduce((x, y) => x + y, 0),
     usedMinor: minor.reduce((x, y) => x + y, 0),
+    artificePoints: artifice.map((c: number) => c * ARTIFICE_MOD_BONUS),
+    usedArtifice: artifice.reduce((x: number, y: number) => x + y, 0),
   };
 }
 
@@ -168,6 +246,10 @@ export interface TuningOutcome {
   applied: (AppliedTuning | null)[];
   modBonus: number[];
   modsUsed: { major: number; minor: number };
+  /** Points each stat gained from artifice +3 mods (covering + maximize dump). */
+  artificeBonus: number[];
+  /** Per slot: the stat the piece's artifice +3 went to (null = not artifice / unspent). */
+  artifice: (number | null)[];
 }
 
 /**
@@ -197,6 +279,7 @@ export function createTuningSearcher(
   // Which stats Balanced left short (so a directional on a piece tuned to that stat can help).
   const shortStat: boolean[] = new Array(NUM_STATS).fill(false);
   const curApplied: (AppliedTuning | null)[] = new Array(NUM_SLOTS).fill(null);
+  const artificePoints = new Array(NUM_STATS).fill(0);
   // suffixUp[i][s] = max tuning upside to stat s reachable from chosen pieces i..4.
   const suffixUp: number[][] = Array.from({ length: NUM_SLOTS + 1 }, () =>
     new Array(NUM_STATS).fill(0),
@@ -209,12 +292,58 @@ export function createTuningSearcher(
     usedMinor: number;
     applied: (AppliedTuning | null)[];
     tuningBonus: number[];
+    artificeBonus: number[];
   }
 
-  const makeOutcome = (sum: number[], w: Winner): TuningOutcome => {
+  /**
+   * Maximize-mode leftover dump: every unspent artifice mod is worth +3 to the total
+   * (artifice is free and piece-intrinsic — it is always socketed in practice), so
+   * dump each into the stat with the most headroom below the cap. Mutates `art`
+   * in place; `base` is the stat value before artifice.
+   */
+  const dumpArtifice = (base: number[], art: number[], leftovers: number): void => {
+    for (let n = 0; n < leftovers; n++) {
+      let best = -1;
+      let bestRoom = 0;
+      for (let s = 0; s < NUM_STATS; s++) {
+        const room = STAT_CAP - (base[s] + art[s]);
+        if (room > bestRoom) {
+          bestRoom = room;
+          best = s;
+        }
+      }
+      if (best < 0) return; // everything capped — stop dumping
+      art[best] += ARTIFICE_MOD_BONUS;
+    }
+  };
+
+  /** Per-slot artifice picks from the per-stat points: hand stats out to artifice pieces in slot order. */
+  const artificeSlots = (
+    chosen: InternalPiece[],
+    art: number[],
+  ): (number | null)[] => {
+    // Nothing spent (the common zero-artifice leaf) — share, don't allocate.
+    if (art === ZERO_ARTIFICE_POINTS) return NO_ARTIFICE_SLOTS;
+    const queue: number[] = [];
+    for (let s = 0; s < NUM_STATS; s++) {
+      for (let n = 0; n < art[s] / ARTIFICE_MOD_BONUS; n++) queue.push(s);
+    }
+    if (queue.length === 0) return NO_ARTIFICE_SLOTS;
+    return Array.from({ length: NUM_SLOTS }, (_, i) =>
+      chosen[i].artifice && queue.length ? (queue.shift() as number) : null,
+    );
+  };
+
+  const makeOutcome = (
+    chosen: InternalPiece[],
+    sum: number[],
+    w: Winner,
+  ): TuningOutcome => {
     const stats = new Array<number>(NUM_STATS);
     for (let s = 0; s < NUM_STATS; s++) {
-      stats[s] = clamp(sum[s] + frag[s] + w.tuningBonus[s] + w.modBonus[s]);
+      stats[s] = clamp(
+        sum[s] + frag[s] + w.tuningBonus[s] + w.modBonus[s] + w.artificeBonus[s],
+      );
     }
     return {
       total: w.total,
@@ -223,10 +352,48 @@ export function createTuningSearcher(
       applied: w.applied,
       modBonus: w.modBonus,
       modsUsed: { major: w.usedMajor, minor: w.usedMinor },
+      artificeBonus: w.artificeBonus,
+      artifice: artificeSlots(chosen, w.artificeBonus),
     };
   };
 
+  /**
+   * Finish a leaf whose mods were assigned: record the covering artifice points into
+   * the `artificePoints` scratch, dump leftovers in maximize mode, and return the
+   * leaf's clamped total. Shared by the Balanced fast path and the slow-path leaf so
+   * the two can't drift (this module exists because two copies of this search once did).
+   */
+  const settleLeaf = (
+    asg: NonNullable<ReturnType<typeof assignMods>>,
+    artCount: number,
+    mode: TuningMode,
+  ): number => {
+    let total = 0;
+    if (artCount === 0) {
+      // The overwhelmingly common leaf (all-Tier-5 loadout): identical math to the
+      // pre-artifice solver, nothing extra touched.
+      for (let s = 0; s < NUM_STATS; s++) {
+        total += clamp(aug[s] + asg.points[s]);
+      }
+      return total;
+    }
+    for (let s = 0; s < NUM_STATS; s++) artificePoints[s] = asg.artificePoints[s];
+    if (mode === "maximize") {
+      // `deficits` is dead once assignMods succeeded — reuse it as the dump's
+      // clamp base (aug + assigned mod points).
+      for (let s = 0; s < NUM_STATS; s++) deficits[s] = aug[s] + asg.points[s];
+      dumpArtifice(deficits, artificePoints, artCount - asg.usedArtifice);
+    }
+    for (let s = 0; s < NUM_STATS; s++) {
+      total += clamp(aug[s] + asg.points[s] + artificePoints[s]);
+    }
+    return total;
+  };
+
   return (chosen, sum, mins, mode) => {
+    let artCount = 0;
+    for (let i = 0; i < NUM_SLOTS; i++) if (chosen[i].artifice) artCount++;
+    const maxLeafPoints = maxModPoints + artCount * ARTIFICE_MOD_BONUS;
     // Fast path: Balanced on every tunable piece (tuneOpts[0] is Balanced, or the
     // no-tune option for a piece that can't be tuned). If that already clears the
     // minimums, it's this loadout's best tuning — return without touching directionals.
@@ -239,21 +406,22 @@ export function createTuningSearcher(
     for (let s = 0; s < NUM_STATS; s++) {
       deficits[s] = Math.max(0, mins[s] - aug[s]);
     }
-    const balAsg = assignMods(deficits, mods.major, mods.minor);
+    const balAsg = assignMods(deficits, mods.major, mods.minor, artCount);
     if (balAsg) {
       const tuningBonus = new Array<number>(NUM_STATS);
-      let total = 0;
       for (let s = 0; s < NUM_STATS; s++) {
         tuningBonus[s] = aug[s] - sum[s] - frag[s];
-        total += clamp(aug[s] + balAsg.points[s]);
       }
-      return makeOutcome(sum, {
-        total,
+      return makeOutcome(chosen, sum, {
+        total: settleLeaf(balAsg, artCount, mode),
         modBonus: balAsg.points.slice(),
         usedMajor: balAsg.usedMajor,
         usedMinor: balAsg.usedMinor,
         applied: curApplied.slice(),
         tuningBonus,
+        // settleLeaf leaves the artifice scratch untouched on the zero path — share.
+        artificeBonus:
+          artCount === 0 ? ZERO_ARTIFICE_POINTS : artificePoints.slice(),
       });
     }
 
@@ -284,8 +452,8 @@ export function createTuningSearcher(
       for (let s = 0; s < NUM_STATS; s++) {
         const d = mins[s] - (aug[s] + suffixUp[i][s]);
         if (d > 0) {
-          needed += Math.ceil(d / 5) * 5;
-          if (needed > maxModPoints) return;
+          needed += deficitPoints(d, artCount > 0);
+          if (needed > maxLeafPoints) return;
         }
       }
       // Branch-and-bound on the best reachable total (maximize only — feasible mode
@@ -294,7 +462,7 @@ export function createTuningSearcher(
       // total), seeding a strong bound that prunes directional branches.
       const w = box.winner;
       if (mode === "maximize" && w) {
-        let ub = maxModPoints;
+        let ub = maxLeafPoints;
         for (let s = 0; s < NUM_STATS; s++) ub += clamp(aug[s] + suffixUp[i][s]);
         if (ub <= w.total) return;
       }
@@ -302,10 +470,9 @@ export function createTuningSearcher(
         for (let s = 0; s < NUM_STATS; s++) {
           deficits[s] = Math.max(0, mins[s] - aug[s]);
         }
-        const asg = assignMods(deficits, mods.major, mods.minor);
+        const asg = assignMods(deficits, mods.major, mods.minor, artCount);
         if (!asg) return;
-        let total = 0;
-        for (let s = 0; s < NUM_STATS; s++) total += clamp(aug[s] + asg.points[s]);
+        const total = settleLeaf(asg, artCount, mode);
         if (!box.winner || total > box.winner.total) {
           const tuningBonus = new Array<number>(NUM_STATS);
           for (let s = 0; s < NUM_STATS; s++) {
@@ -318,6 +485,9 @@ export function createTuningSearcher(
             usedMinor: asg.usedMinor,
             applied: curApplied.slice(),
             tuningBonus,
+            // settleLeaf leaves the artifice scratch untouched on the zero path — share.
+            artificeBonus:
+              artCount === 0 ? ZERO_ARTIFICE_POINTS : artificePoints.slice(),
           };
         }
         return;
@@ -340,6 +510,6 @@ export function createTuningSearcher(
     };
     rec(0);
 
-    return box.winner ? makeOutcome(sum, box.winner) : null;
+    return box.winner ? makeOutcome(chosen, sum, box.winner) : null;
   };
 }

@@ -14,6 +14,8 @@ describe("assignMods", () => {
       points: [0, 0, 0, 0, 0, 0],
       usedMajor: 0,
       usedMinor: 0,
+      artificePoints: [0, 0, 0, 0, 0, 0],
+      usedArtifice: 0,
     });
   });
 
@@ -23,6 +25,8 @@ describe("assignMods", () => {
       points: [10, 0, 0, 0, 0, 0],
       usedMajor: 1,
       usedMinor: 0,
+      artificePoints: [0, 0, 0, 0, 0, 0],
+      usedArtifice: 0,
     });
   });
 
@@ -41,6 +45,8 @@ describe("assignMods", () => {
       points: [5, 0, 0, 0, 0, 0],
       usedMajor: 0,
       usedMinor: 1,
+      artificePoints: [0, 0, 0, 0, 0, 0],
+      usedArtifice: 0,
     });
   });
 
@@ -58,6 +64,8 @@ describe("assignMods", () => {
       points: [5, 10, 0, 0, 0, 0],
       usedMajor: 1,
       usedMinor: 1,
+      artificePoints: [0, 0, 0, 0, 0, 0],
+      usedArtifice: 0,
     });
   });
 
@@ -68,8 +76,64 @@ describe("assignMods", () => {
       points: [10, 10, 10, 5, 5, 0],
       usedMajor: 3,
       usedMinor: 2,
+      artificePoints: [0, 0, 0, 0, 0, 0],
+      usedArtifice: 0,
     });
     expect(assignMods([10, 10, 10, 5, 5, 5], 3, 2)).toBeNull();
+  });
+
+  test("artifice: a 3-point deficit is covered by one artifice mod, zero stat mods", () => {
+    const out = assignMods([3, 0, 0, 0, 0, 0], 0, 0, 1);
+    expect(out).toEqual({
+      points: [0, 0, 0, 0, 0, 0],
+      usedMajor: 0,
+      usedMinor: 0,
+      artificePoints: [3, 0, 0, 0, 0, 0],
+      usedArtifice: 1,
+    });
+  });
+
+  test("artifice unlocks a deficit the mod budget alone can't cover", () => {
+    // 13 needs 10+3: one major + one artifice. Without artifice it's null.
+    expect(assignMods([13, 0, 0, 0, 0, 0], 1, 0, 0)).toBeNull();
+    const out = assignMods([13, 0, 0, 0, 0, 0], 1, 0, 1);
+    expect(out).toEqual({
+      points: [10, 0, 0, 0, 0, 0],
+      usedMajor: 1,
+      usedMinor: 0,
+      artificePoints: [3, 0, 0, 0, 0, 0],
+      usedArtifice: 1,
+    });
+  });
+
+  test("mods are preferred over artifice when either could cover", () => {
+    // One minor (+5) covers the 5-point deficit; the artifice mod stays unspent
+    // (worth more later as a full +3 to the maximize dump).
+    const out = assignMods([5, 0, 0, 0, 0, 0], 0, 1, 1);
+    expect(out).toEqual({
+      points: [5, 0, 0, 0, 0, 0],
+      usedMajor: 0,
+      usedMinor: 1,
+      artificePoints: [0, 0, 0, 0, 0, 0],
+      usedArtifice: 0,
+    });
+  });
+
+  test("backtracking across resources: artifice must move to the stat mods can't reach", () => {
+    // Budget: 1 minor + 1 artifice. Deficits [3, 5]: the minor must go to stat 1
+    // (5 > 3 points), artifice to stat 0 — a minor-on-0 greedy would strand stat 1.
+    const out = assignMods([3, 5, 0, 0, 0, 0], 0, 1, 1);
+    expect(out).toEqual({
+      points: [0, 5, 0, 0, 0, 0],
+      usedMajor: 0,
+      usedMinor: 1,
+      artificePoints: [3, 0, 0, 0, 0, 0],
+      usedArtifice: 1,
+    });
+  });
+
+  test("infeasible even with artifice", () => {
+    expect(assignMods([9, 0, 0, 0, 0, 0], 0, 1, 1)).toBeNull(); // 5+3=8 < 9
   });
 });
 
@@ -155,5 +219,66 @@ describe("maximize/feasible consistency (property)", () => {
         expect(maxed.total, ctx).toBeGreaterThanOrEqual(probe!.total);
       }
     }
+  });
+});
+
+describe("artifice in the tuning searcher", () => {
+  const ZERO6 = [0, 0, 0, 0, 0, 0];
+
+  function internal(p: Partial<OptimizerPiece> & { id: string }): InternalPiece {
+    return makeInternalPiece({ stats: ZERO6.slice(), exotic: false, ...p }, true);
+  }
+
+  /** 5 plain pieces, the first optionally artifice. */
+  function loadout(artifice: boolean): InternalPiece[] {
+    return [
+      internal({ id: "x", artifice, exotic: artifice }),
+      internal({ id: "a" }),
+      internal({ id: "b" }),
+      internal({ id: "c" }),
+      internal({ id: "d" }),
+    ];
+  }
+
+  test("maximize: an artifice piece's +3 is always spent (dump raises total by 3)", () => {
+    const search = createTuningSearcher(ZERO6.slice(), { major: 0, minor: 0 });
+    const sum = [10, 10, 10, 10, 10, 10];
+    const plain = search(loadout(false), sum, ZERO6.slice(), "maximize");
+    const art = search(loadout(true), sum, ZERO6.slice(), "maximize");
+    expect(plain).not.toBeNull();
+    expect(art).not.toBeNull();
+    expect(art!.total).toBe(plain!.total + 3);
+    expect(art!.artificeBonus.reduce((a, b) => a + b, 0)).toBe(3);
+    // Slot 0 is the artifice piece; its pick names the dumped stat.
+    expect(art!.artifice[0]).not.toBeNull();
+    expect(art!.artifice.slice(1)).toEqual([null, null, null, null]);
+  });
+
+  test("feasible: artifice closes a minimum the mod budget alone cannot", () => {
+    const search = createTuningSearcher(ZERO6.slice(), { major: 1, minor: 0 });
+    const sum = [10, 0, 0, 0, 0, 0];
+    const mins = [23, 0, 0, 0, 0, 0]; // needs 13 over base: 10 (major) + 3 (artifice)
+    expect(search(loadout(false), sum, mins.slice(), "feasible")).toBeNull();
+    const out = search(loadout(true), sum, mins.slice(), "feasible");
+    expect(out).not.toBeNull();
+    expect(out!.stats[0]).toBeGreaterThanOrEqual(23);
+    expect(out!.artificeBonus[0]).toBe(3);
+    expect(out!.artifice[0]).toBe(0);
+  });
+
+  test("maximize: dump respects the 200 cap (picks a stat with headroom)", () => {
+    const search = createTuningSearcher(ZERO6.slice(), { major: 0, minor: 0 });
+    const sum = [200, 200, 200, 200, 200, 50];
+    const out = search(loadout(true), sum, ZERO6.slice(), "maximize");
+    expect(out).not.toBeNull();
+    expect(out!.artifice[0]).toBe(5); // only stat 5 has headroom
+    expect(out!.stats[5]).toBe(53);
+  });
+
+  test("no artifice pieces: outcome carries zero artifice fields (regression shape)", () => {
+    const search = createTuningSearcher(ZERO6.slice(), { major: 0, minor: 0 });
+    const out = search(loadout(false), [10, 0, 0, 0, 0, 0], ZERO6.slice(), "maximize");
+    expect(out!.artificeBonus).toEqual(ZERO6);
+    expect(out!.artifice).toEqual([null, null, null, null, null]);
   });
 });

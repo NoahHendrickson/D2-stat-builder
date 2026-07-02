@@ -73,6 +73,28 @@ function TunedCell({
   );
 }
 
+/**
+ * The Tuned-column cell for an artifice piece: the picked stat's icon + "+3".
+ * Renders nothing for non-artifice pieces (tuning and artifice are mutually
+ * exclusive on a piece, so the column is shared).
+ */
+function ArtificeCell({
+  pick,
+  statIcons,
+}: {
+  pick: number | null;
+  statIcons: StatIconMap;
+}) {
+  if (pick === null) return null;
+  const key = STAT_ORDER[pick];
+  return (
+    <span className="flex items-center gap-0.5 text-[10px] text-sky-400/80 tabular-nums">
+      <StatGlyph src={statIcons[key]} label={`Artifice +3 ${STAT_LABELS[key]}`} />
+      +3
+    </span>
+  );
+}
+
 function StatGlyph({
   src,
   label,
@@ -148,6 +170,7 @@ interface BuildActionProps {
   characters: ArmoryCharacter[];
   statModHashes: StatModHashes[] | null;
   tuningPlugHashes: Map<string, number> | null;
+  artificeModHashes: (number | undefined)[] | null;
   subclass?: DimSubclassInput;
   onEquipped?: () => void;
 }
@@ -163,6 +186,7 @@ function BuildRow({
   characters,
   statModHashes,
   tuningPlugHashes,
+  artificeModHashes,
   subclass,
   onEquipped,
 }: {
@@ -290,11 +314,18 @@ function BuildRow({
                   </div>
                 ))}
                 <div className="flex justify-center">
-                  <TunedCell
-                    tune={loadout.tuning[pi]}
-                    statIcons={statIcons}
-                    balancedTuningIcon={balancedTuningIcon}
-                  />
+                  {loadout.tuning[pi] ? (
+                    <TunedCell
+                      tune={loadout.tuning[pi]}
+                      statIcons={statIcons}
+                      balancedTuningIcon={balancedTuningIcon}
+                    />
+                  ) : (
+                    <ArtificeCell
+                      pick={loadout.artifice[pi]}
+                      statIcons={statIcons}
+                    />
+                  )}
                 </div>
               </Fragment>
             );
@@ -313,6 +344,20 @@ function BuildRow({
               )
             }
           />
+          {loadout.artificeBonus.some((v) => v > 0) && (
+            <BreakdownRow
+              label="Artifice"
+              render={(i) =>
+                loadout.artificeBonus[i] ? (
+                  <span className="text-sky-400/80">
+                    +{loadout.artificeBonus[i]}
+                  </span>
+                ) : (
+                  ""
+                )
+              }
+            />
+          )}
           <BreakdownRow
             label="Tuning"
             render={(i) => {
@@ -347,6 +392,7 @@ function BuildRow({
             characters={characters}
             statModHashes={statModHashes}
             tuningPlugHashes={tuningPlugHashes}
+            artificeModHashes={artificeModHashes}
             subclass={subclass}
             onEquipped={onEquipped}
           />
@@ -370,6 +416,7 @@ function BuildActions({
   characters,
   statModHashes,
   tuningPlugHashes,
+  artificeModHashes,
   subclass,
   onEquipped,
 }: {
@@ -392,7 +439,8 @@ function BuildActions({
     : "Refresh your gear — a piece in this build is missing";
 
   const openInDim = () => {
-    if (!complete || !statModHashes || !tuningPlugHashes) return;
+    if (!complete || !statModHashes || !tuningPlugHashes || !artificeModHashes)
+      return;
     const url = buildDimLoadoutUrl(
       buildDimLoadout({
         loadout,
@@ -401,6 +449,7 @@ function BuildActions({
         targets,
         statModHashes,
         tuningPlugHashes,
+        artificeModHashes,
         subclass:
           subclass?.itemHash !== undefined
             ? {
@@ -478,7 +527,9 @@ function BuildActions({
       <Button
         size="sm"
         onClick={openInDim}
-        disabled={!complete || !statModHashes || !tuningPlugHashes}
+        disabled={
+          !complete || !statModHashes || !tuningPlugHashes || !artificeModHashes
+        }
         title={missingTitle}
       >
         <ArrowSquareOut weight="duotone" aria-hidden />
@@ -498,6 +549,7 @@ export function BuildResults({
   characters,
   statModHashes,
   tuningPlugHashes,
+  artificeModHashes,
   subclass,
   onEquipped,
 }: {
@@ -538,6 +590,7 @@ export function BuildResults({
             characters={characters}
             statModHashes={statModHashes}
             tuningPlugHashes={tuningPlugHashes}
+            artificeModHashes={artificeModHashes}
             subclass={subclass}
             onEquipped={onEquipped}
           />

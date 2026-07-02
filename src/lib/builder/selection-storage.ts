@@ -28,6 +28,8 @@ export interface PersistedSelections {
   setFilters: SetFilters;
   exoticName: string | null;
   allowTuning: boolean;
+  /** Include legacy (Armor 2.0 / non-tunable) exotics in the optimizer pool. */
+  legacyExotics: boolean;
   activeSubclass: Subclass;
   fragSel: Record<Subclass, number[]>;
 }
@@ -134,6 +136,9 @@ function parse(raw: string | null): PersistedSelections | null {
   const setFilters = parseSetFilters(o.setFilters);
   if (!(typeof o.exoticName === "string" || o.exoticName === null)) return null;
   if (typeof o.allowTuning !== "boolean") return null;
+  // Optional (added after v1 shipped) — older stored blobs won't have it. Default ON.
+  const legacyExotics =
+    typeof o.legacyExotics === "boolean" ? o.legacyExotics : true;
   if (typeof o.activeSubclass !== "string" || !SUBCLASS_SET.has(o.activeSubclass))
     return null;
   if (typeof o.fragSel !== "object" || o.fragSel === null) return null;
@@ -159,6 +164,7 @@ function parse(raw: string | null): PersistedSelections | null {
     setFilters,
     exoticName: o.exoticName as string | null,
     allowTuning: o.allowTuning as boolean,
+    legacyExotics,
     activeSubclass: o.activeSubclass as Subclass,
     fragSel,
   };

@@ -375,3 +375,79 @@ describe("exotic tuning", () => {
     }
   });
 });
+
+describe("legacy exotics (artifice +3)", () => {
+  /** An artifice legacy exotic: no tuning, free +3 any-stat mod. */
+  function legacyExotic(id: string, stats: number[]): OptimizerPiece {
+    return { id, stats, exotic: true, hash: 999, artifice: true };
+  }
+
+  test("a build's artifice +3 lands in artificeBonus and the piece's slot pick", () => {
+    const slots = [
+      [legacyExotic("x", [30, 0, 0, 0, 0, 0])],
+      [piece("a", [0, 20, 0, 0, 0, 0])],
+      [piece("b", [0, 0, 10, 0, 0, 0])],
+      [piece("c", [0, 0, 0, 40, 0, 0])],
+      [piece("d", [0, 0, 0, 0, 15, 0])],
+    ];
+    const out = solve(input(slots));
+    expect(out.loadouts.length).toBe(1);
+    const lo = out.loadouts[0];
+    expect(lo.artificeBonus.reduce((a, b) => a + b, 0)).toBe(3);
+    expect(lo.artifice[0]).not.toBeNull();
+    expect(lo.artifice.slice(1)).toEqual([null, null, null, null]);
+    expect(lo.total).toBe(30 + 20 + 10 + 40 + 15 + 3);
+  });
+
+  test("artifice closes a minimum the mod budget can't (feasibility, not just total)", () => {
+    const slots = [
+      [legacyExotic("x", [10, 0, 0, 0, 0, 0]), piece("p", [10, 0, 0, 0, 0, 0])],
+      [piece("a", [0, 0, 0, 0, 0, 0])],
+      [piece("b", [0, 0, 0, 0, 0, 0])],
+      [piece("c", [0, 0, 0, 0, 0, 0])],
+      [piece("d", [0, 0, 0, 0, 0, 0])],
+    ];
+    // Needs 23 weapons: base 10 + major 10 + artifice 3. The plain piece can't.
+    const out = solve(
+      input(slots, { minimums: [23, 0, 0, 0, 0, 0], mods: { major: 1, minor: 0 } }),
+    );
+    expect(out.loadouts.length).toBe(1);
+    expect(out.loadouts[0].pieceIds[0]).toBe("x");
+  });
+
+  test("an artifice piece raises every stat's ceiling by 3", () => {
+    const mk = (artifice: boolean) => [
+      [
+        artifice
+          ? legacyExotic("x", [30, 0, 0, 0, 0, 0])
+          : piece("x", [30, 0, 0, 0, 0, 0]),
+      ],
+      [piece("a", [0, 20, 0, 0, 0, 0])],
+      [piece("b", [0, 0, 10, 0, 0, 0])],
+      [piece("c", [0, 0, 0, 40, 0, 0])],
+      [piece("d", [0, 0, 0, 0, 15, 0])],
+    ];
+    const plain = solve(input(mk(false)));
+    const art = solve(input(mk(true)));
+    for (let s = 0; s < 6; s++) {
+      expect(art.ceilings[s]).toBe(plain.ceilings[s] + 3);
+    }
+  });
+
+  test("dedupe keeps an artifice piece distinct from a stat-identical plain piece", () => {
+    const slots = [
+      [
+        { id: "plain", stats: [30, 0, 0, 0, 0, 0], exotic: true, hash: 999 },
+        legacyExotic("art", [30, 0, 0, 0, 0, 0]),
+      ],
+      [piece("a", [0, 20, 0, 0, 0, 0])],
+      [piece("b", [0, 0, 10, 0, 0, 0])],
+      [piece("c", [0, 0, 0, 40, 0, 0])],
+      [piece("d", [0, 0, 0, 0, 15, 0])],
+    ] as OptimizerPiece[][];
+    const out = solve(input(slots));
+    // If dedupe collapsed them the artifice version could be lost; the best build
+    // must carry the +3.
+    expect(out.loadouts[0].artificeBonus.reduce((a, b) => a + b, 0)).toBe(3);
+  });
+});

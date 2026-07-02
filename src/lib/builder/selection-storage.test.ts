@@ -61,6 +61,7 @@ function sampleSelections(): PersistedSelections {
     setFilters: { ...DEFAULT_SET_FILTERS, hideZero: false },
     exoticName: "Gyrfalcon's Hauberk",
     allowTuning: true,
+    legacyExotics: false,
     activeSubclass: "Void",
     fragSel: fragSelToArrays(frag),
   };
@@ -92,6 +93,13 @@ test("load defaults pinnedSets to [] for data stored before the field existed", 
   delete old.pinnedSets;
   localStorage.setItem(SELECTIONS_KEY, JSON.stringify(old));
   expect(loadSelections()).toEqual({ ...old, pinnedSets: [] });
+});
+
+test("load defaults legacyExotics to true for data stored before the field existed", () => {
+  const old: Partial<PersistedSelections> = sampleSelections();
+  delete old.legacyExotics;
+  localStorage.setItem(SELECTIONS_KEY, JSON.stringify(old));
+  expect(loadSelections()).toEqual({ ...old, legacyExotics: true });
 });
 
 test("load defaults setFilters for data stored before the field existed", () => {
