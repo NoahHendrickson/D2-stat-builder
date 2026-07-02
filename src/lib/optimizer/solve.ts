@@ -53,6 +53,7 @@ function dedupe(
         : "-";
     const key =
       (p.exotic ? `E${p.hash ?? 0}` : "L") +
+      (p.artifice ? "A" : "") +
       (keyIncludesSet ? `|${p.setHash ?? 0}|` : "|") +
       `T${tuneKey}|` +
       p.stats.join(",");
@@ -79,6 +80,7 @@ function computeSuffixBounds(
   suffixTotal: number[];
   setSuffix: number[][];
   exoticSuffix: number[];
+  artSuffix: number[];
 } {
   const suffixStat: number[][] = Array.from({ length: NUM_SLOTS + 1 }, () =>
     new Array(NUM_STATS).fill(0),
@@ -87,6 +89,9 @@ function computeSuffixBounds(
   // setSuffix[r][k] = number of slots in k..4 that contain ≥1 piece of reqs[r].setHash.
   const setSuffix = reqs.map(() => new Array(NUM_SLOTS + 1).fill(0));
   const exoticSuffix = new Array(NUM_SLOTS + 1).fill(0);
+  // artSuffix[k] = number of slots in k..4 offering ≥1 artifice piece — an upper bound
+  // on the free +3 mods any completion from slot k can still add.
+  const artSuffix = new Array(NUM_SLOTS + 1).fill(0);
   for (let k = NUM_SLOTS - 1; k >= 0; k--) {
     const slotMax = new Array(NUM_STATS).fill(0);
     let slotBestTotal = 0;
@@ -110,8 +115,9 @@ function computeSuffixBounds(
       const has = slots[k].some(isChosenExotic) ? 1 : 0;
       exoticSuffix[k] = exoticSuffix[k + 1] + has;
     }
+    artSuffix[k] = artSuffix[k + 1] + (slots[k].some((p) => p.artifice) ? 1 : 0);
   }
-  return { suffixStat, suffixTotal, setSuffix, exoticSuffix };
+  return { suffixStat, suffixTotal, setSuffix, exoticSuffix, artSuffix };
 }
 
 /** Fixed-capacity min-heap of loadouts keyed by total — the root is the worst kept. */
@@ -220,7 +226,7 @@ export function solve(
     };
   }
 
-  const { suffixStat, suffixTotal, setSuffix, exoticSuffix } =
+  const { suffixStat, suffixTotal, setSuffix, exoticSuffix, artSuffix } =
     computeSuffixBounds(slots, reqs, needExotic, isChosenExotic);
 
   const heap = new TopNHeap(maxResults);
@@ -230,6 +236,8 @@ export function solve(
   const chosen: InternalPiece[] = new Array(NUM_SLOTS);
   const setCounts = new Array(reqs.length).fill(0);
   let runningTotal = 0;
+  // Artifice pieces chosen so far — each is a free +3 the bounds must account for.
+  let chosenArt = 0;
   let combosTried = 0;
   let combosValid = 0;
   // Time cap for the top-N search: past the deadline it stops and reports `capped`.
@@ -266,12 +274,16 @@ export function solve(
   // shared budget. The joint check is what prunes multi-constraint queries (e.g. weapon
   // AND grenade both demanding) early enough to avoid exhaustive walks.
   const canReachMin = (k: number): boolean => {
+    // Artifice mods (+3 each, free) widen the budget but break the 5-point mod
+    // grain, so the rounding only applies when none are reachable.
+    const artUp = chosenArt + artSuffix[k];
+    const budget = maxModPoints + artUp * 3;
     let needed = 0;
     for (let s = 0; s < NUM_STATS; s++) {
       const d = min[s] - (sum[s] + frag[s] + sumTuneUp[s] + suffixStat[k][s]);
       if (d > 0) {
-        needed += Math.ceil(d / 5) * 5;
-        if (needed > maxModPoints) return false;
+        needed += artUp === 0 ? Math.ceil(d / 5) * 5 : d;
+        if (needed > budget) return false;
       }
     }
     return true;
@@ -315,8 +327,8 @@ export function solve(
           tuning: best.applied,
           modBonus: best.modBonus,
           modsUsed: best.modsUsed,
-          artificeBonus: new Array(NUM_STATS).fill(0),
-          artifice: new Array(NUM_SLOTS).fill(null),
+          artificeBonus: best.artificeBonus,
+          artifice: best.artifice,
           total: best.total,
           exotic: exoticCount > 0,
         });
@@ -328,7 +340,12 @@ export function solve(
     if (needExotic && exoticCount + exoticSuffix[k] < 1) return;
     if (
       heap.full() &&
-      runningTotal + suffixTotal[k] + maxModPoints + fragUpside <= heap.worst
+      runningTotal +
+        suffixTotal[k] +
+        maxModPoints +
+        (chosenArt + artSuffix[k]) * 3 +
+        fragUpside <=
+        heap.worst
     ) {
       return;
     }
@@ -352,6 +369,7 @@ export function solve(
         sumTuneUp[s] += p.tuneStatUpside[s];
       }
       runningTotal += p.total + p.tuneTotalUpside;
+      if (p.artifice) chosenArt++;
       for (let r = 0; r < reqs.length; r++) {
         if (p.setHash === reqs[r].setHash) setCounts[r]++;
       }
@@ -360,6 +378,7 @@ export function solve(
       for (let r = 0; r < reqs.length; r++) {
         if (p.setHash === reqs[r].setHash) setCounts[r]--;
       }
+      if (p.artifice) chosenArt--;
       runningTotal -= p.total + p.tuneTotalUpside;
       for (let s = 0; s < NUM_STATS; s++) {
         sum[s] -= p.stats[s];
@@ -436,7 +455,7 @@ function runCeilings(
       ? p.hash !== undefined && !!exoticHashes?.includes(p.hash)
       : true);
 
-  const { suffixStat, setSuffix, exoticSuffix } = computeSuffixBounds(
+  const { suffixStat, setSuffix, exoticSuffix, artSuffix } = computeSuffixBounds(
     slots,
     reqs,
     needExotic,
@@ -447,6 +466,8 @@ function runCeilings(
   const sum = new Array(NUM_STATS).fill(0);
   // Best tuning upside per stat from the pieces chosen so far (keeps the bound admissible).
   const sumTuneUp = new Array(NUM_STATS).fill(0);
+  // Artifice pieces chosen so far — each is a free +3 the bounds must account for.
+  let chosenArt = 0;
   const chosen: InternalPiece[] = new Array(NUM_SLOTS);
   const setCounts = new Array(reqs.length).fill(0);
   // Probe minimums: `min` with one stat temporarily raised during the binary search.
@@ -468,12 +489,16 @@ function runCeilings(
   // that joint check is what keeps UNsatisfiable probes from degenerating into exhaustive
   // walks when two stats are demanding at once (the probed stat + a held minimum).
   const canReachMin = (k: number): boolean => {
+    // Artifice mods (+3 each, free) widen the budget but break the 5-point mod
+    // grain, so the rounding only applies when none are reachable.
+    const artUp = chosenArt + artSuffix[k];
+    const budget = maxModPoints + artUp * 3;
     let needed = 0;
     for (let s = 0; s < NUM_STATS; s++) {
       const d = probeMins[s] - (sum[s] + frag[s] + sumTuneUp[s] + suffixStat[k][s]);
       if (d > 0) {
-        needed += Math.ceil(d / 5) * 5;
-        if (needed > maxModPoints) return false;
+        needed += artUp === 0 ? Math.ceil(d / 5) * 5 : d;
+        if (needed > budget) return false;
       }
     }
     return true;
@@ -513,6 +538,7 @@ function runCeilings(
         sum[s] += p.stats[s];
         sumTuneUp[s] += p.tuneStatUpside[s];
       }
+      if (p.artifice) chosenArt++;
       for (let r = 0; r < reqs.length; r++) {
         if (p.setHash === reqs[r].setHash) setCounts[r]++;
       }
@@ -521,6 +547,7 @@ function runCeilings(
       for (let r = 0; r < reqs.length; r++) {
         if (p.setHash === reqs[r].setHash) setCounts[r]--;
       }
+      if (p.artifice) chosenArt--;
       for (let s = 0; s < NUM_STATS; s++) {
         sum[s] -= p.stats[s];
         sumTuneUp[s] -= p.tuneStatUpside[s];
@@ -548,7 +575,7 @@ function runCeilings(
   const optimistic = new Array(NUM_STATS).fill(0);
   let pending: number[] = [];
   for (let t = 0; t < NUM_STATS; t++) {
-    optimistic[t] = clamp(frag[t] + suffixStat[0][t] + maxModPoints);
+    optimistic[t] = clamp(frag[t] + suffixStat[0][t] + maxModPoints + artSuffix[0] * 3);
     if (optimistic[t] > ceiling[t]) pending.push(t);
   }
   while (pending.length) {
