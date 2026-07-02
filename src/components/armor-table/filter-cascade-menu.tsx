@@ -14,19 +14,25 @@ import { Button } from "@/components/ui/button";
 import { Menu } from "@/components/ui/menu";
 import {
   FilterMultiselectPanel,
+  filterMultiselectActiveBadgeClasses,
   filterMultiselectTriggerClasses,
   selectionSummary,
 } from "@/components/armor-table/filter-multiselect";
 
-function countFacetSelections(facets: FacetFilters): number {
-  return (
-    facets.classes.length +
-    facets.armorVersions.length +
-    facets.setHashes.length +
-    facets.archetypes.length +
-    facets.tunings.length +
-    facets.tertiaries.length
-  );
+const ALL_FACET_KEYS = [
+  "classes",
+  "armorVersions",
+  "setHashes",
+  "archetypes",
+  "tunings",
+  "tertiaries",
+] as const satisfies readonly (keyof FacetFilters)[];
+
+function countFacetSelections(
+  facets: FacetFilters,
+  keys: readonly (keyof FacetFilters)[] = ALL_FACET_KEYS,
+): number {
+  return keys.reduce((sum, key) => sum + facets[key].length, 0);
 }
 
 function CascadeFacetSubmenu<V extends string | number>({
@@ -66,10 +72,7 @@ function CascadeFacetSubmenu<V extends string | number>({
             {selectionSummary(value, options, allLabel)}
           </span>
           {active && (
-            <Badge
-              variant="secondary"
-              className="h-4 shrink-0 px-1 text-[10px] tabular-nums"
-            >
+            <Badge className={filterMultiselectActiveBadgeClasses}>
               {value.length}
             </Badge>
           )}
@@ -120,6 +123,8 @@ export function FilterCascadeMenu({
   onClearFilters,
   classOptions,
   armorVersionOptions,
+  includedFacets = ALL_FACET_KEYS,
+  triggerLabel = "Filters",
 }: {
   facets: FacetFilters;
   onFacetChange: <K extends keyof FacetFilters>(
@@ -137,9 +142,14 @@ export function FilterCascadeMenu({
   onClearFilters: () => void;
   classOptions: FilterOption<number>[];
   armorVersionOptions: FilterOption<ArmorVersion>[];
+  includedFacets?: readonly (keyof FacetFilters)[];
+  triggerLabel?: string;
 }) {
-  const totalSelected = countFacetSelections(facets);
+  const totalSelected = countFacetSelections(facets, includedFacets);
   const active = totalSelected > 0;
+  const showClearAll = includedFacets.length === ALL_FACET_KEYS.length;
+
+  const includes = (key: keyof FacetFilters) => includedFacets.includes(key);
 
   const tuningOptions: FilterOption<TuningFilter>[] = [
     ...statOptions,
@@ -150,17 +160,16 @@ export function FilterCascadeMenu({
     <Menu.Root>
       <Menu.Trigger
         aria-label={
-          active ? `Filters — ${totalSelected} selected` : "Filters"
+          active
+            ? `${triggerLabel} — ${totalSelected} selected`
+            : triggerLabel
         }
         data-active={active || undefined}
         className={cn(filterMultiselectTriggerClasses, "min-w-28")}
       >
-        <span className="min-w-0 flex-1 truncate text-left">Filters</span>
+        <span className="min-w-0 flex-1 truncate text-left">{triggerLabel}</span>
         {active && (
-          <Badge
-            variant="secondary"
-            className="h-4 shrink-0 px-1 text-[10px] tabular-nums"
-          >
+          <Badge className={filterMultiselectActiveBadgeClasses}>
             {totalSelected}
           </Badge>
         )}
@@ -173,68 +182,84 @@ export function FilterCascadeMenu({
       <Menu.Portal>
         <Menu.Positioner side="bottom" align="start">
           <Menu.Popup className="w-56 p-1">
-            <CascadeFacetSubmenu
-              label="Class"
-              allLabel="All classes"
-              options={classOptions}
-              value={facets.classes}
-              onChange={(v) => onFacetChange("classes", v)}
-            />
-            <CascadeFacetSubmenu
-              label="Armor"
-              allLabel="All armor"
-              options={armorVersionOptions}
-              value={facets.armorVersions}
-              onChange={(v) => onFacetChange("armorVersions", v)}
-            />
-            <CascadeFacetSubmenu
-              label="Set"
-              allLabel="All sets"
-              options={setOptions}
-              value={facets.setHashes}
-              onChange={(v) => onFacetChange("setHashes", v)}
-              searchable
-              pinnable
-              pinned={pinnedSets}
-              onTogglePin={onTogglePinnedSet}
-            />
-            <CascadeFacetSubmenu
-              label="Archetype"
-              allLabel="All archetypes"
-              options={archetypeOptions}
-              value={facets.archetypes}
-              onChange={(v) => onFacetChange("archetypes", v)}
-              searchable
-              pinnable
-              pinned={pinnedArchetypes}
-              onTogglePin={onTogglePinnedArchetype}
-            />
-            <CascadeFacetSubmenu<TuningFilter>
-              label="Tuning"
-              allLabel="Any tuning"
-              options={tuningOptions}
-              value={facets.tunings}
-              onChange={(v) => onFacetChange("tunings", v)}
-            />
-            <CascadeFacetSubmenu
-              label="Tertiary"
-              allLabel="Any tertiary"
-              options={statOptions}
-              value={facets.tertiaries}
-              onChange={(v) => onFacetChange("tertiaries", v)}
-            />
-            <Menu.Separator className="bg-border my-1 h-px" />
-            <div className="flex justify-end p-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 px-1.5 text-xs"
-                disabled={!filtersActive}
-                onClick={onClearFilters}
-              >
-                Clear all
-              </Button>
-            </div>
+            {includes("classes") && (
+              <CascadeFacetSubmenu
+                label="Class"
+                allLabel="All classes"
+                options={classOptions}
+                value={facets.classes}
+                onChange={(v) => onFacetChange("classes", v)}
+              />
+            )}
+            {includes("armorVersions") && (
+              <CascadeFacetSubmenu
+                label="Armor"
+                allLabel="All armor"
+                options={armorVersionOptions}
+                value={facets.armorVersions}
+                onChange={(v) => onFacetChange("armorVersions", v)}
+              />
+            )}
+            {includes("setHashes") && (
+              <CascadeFacetSubmenu
+                label="Set"
+                allLabel="All sets"
+                options={setOptions}
+                value={facets.setHashes}
+                onChange={(v) => onFacetChange("setHashes", v)}
+                searchable
+                pinnable
+                pinned={pinnedSets}
+                onTogglePin={onTogglePinnedSet}
+              />
+            )}
+            {includes("archetypes") && (
+              <CascadeFacetSubmenu
+                label="Archetype"
+                allLabel="All archetypes"
+                options={archetypeOptions}
+                value={facets.archetypes}
+                onChange={(v) => onFacetChange("archetypes", v)}
+                searchable
+                pinnable
+                pinned={pinnedArchetypes}
+                onTogglePin={onTogglePinnedArchetype}
+              />
+            )}
+            {includes("tunings") && (
+              <CascadeFacetSubmenu<TuningFilter>
+                label="Tuning"
+                allLabel="Any tuning"
+                options={tuningOptions}
+                value={facets.tunings}
+                onChange={(v) => onFacetChange("tunings", v)}
+              />
+            )}
+            {includes("tertiaries") && (
+              <CascadeFacetSubmenu
+                label="Tertiary"
+                allLabel="Any tertiary"
+                options={statOptions}
+                value={facets.tertiaries}
+                onChange={(v) => onFacetChange("tertiaries", v)}
+              />
+            )}
+            {showClearAll && (
+              <>
+                <Menu.Separator className="bg-border my-1 h-px" />
+                <div className="flex justify-end p-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-1.5 text-xs"
+                    disabled={!filtersActive}
+                    onClick={onClearFilters}
+                  >
+                    Clear all
+                  </Button>
+                </div>
+              </>
+            )}
           </Menu.Popup>
         </Menu.Positioner>
       </Menu.Portal>

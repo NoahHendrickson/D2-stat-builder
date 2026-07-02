@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { CaretDown, MagnifyingGlass, PushPin } from "@phosphor-icons/react";
+import { useRef, useState } from "react";
+import { CaretDown, MagnifyingGlass, PushPin, X } from "@phosphor-icons/react";
 import { partitionByPin, type FilterOption } from "@/lib/armor-table/pinned";
 import {
   field3dFocusVisibleClasses,
@@ -9,7 +9,6 @@ import {
   field3dSurfaceClasses,
 } from "@/lib/field-surface";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -19,32 +18,42 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 
-const MAX_SUMMARY_LABELS = 2;
+/** "Warlock" for one selection, "Gunner +2 more" for several, null when empty. */
+export function selectionSummaryText<V>(
+  selected: readonly V[],
+  options: readonly FilterOption<V>[],
+): string | null {
+  if (selected.length === 0) return null;
+  const first =
+    options.find((o) => Object.is(o.value, selected[0]))?.label ??
+    String(selected[0]);
+  return selected.length > 1
+    ? `${first} +${selected.length - 1} more`
+    : first;
+}
 
-/** Trigger text: `allLabel` when nothing is selected, else "A, B +n". */
+/** Trigger text: muted `allLabel` when nothing is selected, else the summary. */
 export function selectionSummary<V>(
   selected: readonly V[],
   options: readonly FilterOption<V>[],
   allLabel: string,
 ) {
-  if (selected.length === 0) {
-    return <span className="text-muted-foreground">{allLabel}</span>;
-  }
-  const labels = selected.map(
-    (v) => options.find((o) => Object.is(o.value, v))?.label ?? String(v),
+  return (
+    selectionSummaryText(selected, options) ?? (
+      <span className="text-muted-foreground">{allLabel}</span>
+    )
   );
-  const shown = labels.slice(0, MAX_SUMMARY_LABELS).join(", ");
-  return labels.length > MAX_SUMMARY_LABELS
-    ? `${shown} +${labels.length - MAX_SUMMARY_LABELS}`
-    : shown;
 }
+
+export const filterMultiselectActiveBadgeClasses =
+  "h-4 shrink-0 border-transparent bg-brand px-1 text-[10px] text-white tabular-nums";
 
 export const filterMultiselectTriggerClasses = cn(
   "flex h-8 items-center justify-between gap-1.5 rounded-[6px] border border-transparent bg-clip-padding py-2 pr-2 pl-2.5 text-sm whitespace-nowrap outline-none select-none",
   field3dSurfaceClasses,
   field3dInteractiveClasses,
   field3dFocusVisibleClasses,
-  "data-active:after:border-brand/60 data-active:after:bg-brand/10 data-active:hover:after:bg-brand/15",
+  "data-active:after:border-brand data-active:hover:after:bg-background",
 );
 
 type FilterMultiselectPanelProps<V extends string | number> = {
@@ -180,10 +189,11 @@ export function FilterMultiselectPanel<V extends string | number>({
  * Checkbox-multiselect filter dropdown (ported UX from armorset-tracker):
  * popover panel with one checkbox row per option, optional in-panel search,
  * optional pin-to-top per option, and a Clear footer. The trigger mirrors
- * SelectTrigger's 3D field treatment and tints brand-blue while any value is
- * selected.
+ * SelectTrigger's 3D field treatment and shows a brand-blue border while any
+ * value is selected.
  */
 export function FilterMultiselect<V extends string | number>({
+  label,
   allLabel,
   options,
   value,
@@ -194,6 +204,7 @@ export function FilterMultiselect<V extends string | number>({
   onTogglePin,
   className,
 }: {
+  label: string;
   allLabel: string;
   options: FilterOption<V>[];
   value: V[];
@@ -205,57 +216,78 @@ export function FilterMultiselect<V extends string | number>({
   className?: string;
 }) {
   const [query, setQuery] = useState("");
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const active = value.length > 0;
+  const summaryText = selectionSummaryText(value, options);
 
   return (
-    // Uncontrolled open state: Base UI wires trigger association (and with it
-    // outside-click/Escape dismissal) itself; we only listen to reset the
-    // query on close. Don't cancel() the escape-key close to make Escape
-    // clear-then-close — a canceled dismissal wedges Base UI's dismiss state
-    // and the panel stops closing at all.
-    <Popover
-      onOpenChange={(next) => {
-        if (!next) setQuery("");
-      }}
-    >
-      <PopoverTrigger
-        aria-label={
-          active ? `${allLabel} — ${value.length} selected` : allLabel
-        }
-        data-active={active || undefined}
-        className={cn(filterMultiselectTriggerClasses, className)}
+    <div className={cn("relative w-40 shrink-0 overflow-visible", className)}>
+      {/* Uncontrolled open state: Base UI wires trigger association (and with it
+          outside-click/Escape dismissal) itself; we only listen to reset the
+          query on close. Don't cancel() the escape-key close to make Escape
+          clear-then-close — a canceled dismissal wedges Base UI's dismiss state
+          and the panel stops closing at all. */}
+      <Popover
+        onOpenChange={(next) => {
+          if (!next) setQuery("");
+        }}
       >
-        <span className="min-w-0 flex-1 truncate text-left">
-          {selectionSummary(value, options, allLabel)}
-        </span>
+        <PopoverTrigger
+          ref={triggerRef}
+          aria-label={
+            active
+              ? `${label}: ${summaryText} — ${value.length} selected`
+              : `${label}: ${allLabel}`
+          }
+          data-active={active || undefined}
+          className={cn(
+            filterMultiselectTriggerClasses,
+            "peer/filter box-border w-full",
+          )}
+        >
+          <span className="min-w-0 flex-1 truncate text-left">
+            {selectionSummary(value, options, allLabel)}
+          </span>
+          {active ? (
+            // Placeholder for the caret slot; the clear button overlays it
+            // from outside (it can't live in here — no button-in-button).
+            <span className="size-4 shrink-0" aria-hidden />
+          ) : (
+            <CaretDown
+              weight="duotone"
+              className="text-muted-foreground pointer-events-none size-4 shrink-0"
+              aria-hidden
+            />
+          )}
+        </PopoverTrigger>
         {active && (
-          <Badge
-            variant="secondary"
-            className="h-4 shrink-0 px-1 text-[10px] tabular-nums"
+          <button
+            type="button"
+            aria-label={`Clear ${label.toLowerCase()} filter`}
+            onClick={() => {
+              onChange([]);
+              triggerRef.current?.focus();
+            }}
+            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 absolute top-1/2 right-1.5 flex size-5 -translate-y-1/2 items-center justify-center rounded-[4px] outline-none focus-visible:ring-3 peer-active/filter:translate-y-[calc(-50%+4px)]"
           >
-            {value.length}
-          </Badge>
+            <X weight="bold" className="size-3.5" aria-hidden />
+          </button>
         )}
-        <CaretDown
-          weight="duotone"
-          className="text-muted-foreground pointer-events-none size-4 shrink-0"
-          aria-hidden
-        />
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-64 p-0">
-        <FilterMultiselectPanel
-          allLabel={allLabel}
-          options={options}
-          value={value}
-          onChange={onChange}
-          query={query}
-          onQueryChange={setQuery}
-          searchable={searchable}
-          pinnable={pinnable}
-          pinned={pinned}
-          onTogglePin={onTogglePin}
-        />
-      </PopoverContent>
-    </Popover>
+        <PopoverContent align="start" className="w-64 p-0">
+          <FilterMultiselectPanel
+            allLabel={allLabel}
+            options={options}
+            value={value}
+            onChange={onChange}
+            query={query}
+            onQueryChange={setQuery}
+            searchable={searchable}
+            pinnable={pinnable}
+            pinned={pinned}
+            onTogglePin={onTogglePin}
+          />
+        </PopoverContent>
+      </Popover>
+    </div>
   );
 }
