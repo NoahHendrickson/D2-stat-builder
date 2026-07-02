@@ -172,8 +172,9 @@ export function BuilderPanel({
         SUBCLASSES.map((s) => [s, new Set<number>()]),
       ) as Record<Subclass, Set<number>>,
   );
-  // Legacy (Armor 2.0 / artifice) support is not built yet — the toggle is disabled.
-  const [useLegacyArmor] = useState(false);
+  // Legacy EXOTICS are supported (the solver spends their artifice +3); legacy
+  // legendaries are not yet — that toggle stays disabled.
+  const [useLegacyExotics, setUseLegacyExotics] = useState(true);
 
   // Persistence guards: `restored` stops the save effect from writing defaults over stored
   // data before the restore runs; `pendingExoticName` hands the restored exotic (persisted by
@@ -192,6 +193,7 @@ export function BuilderPanel({
       setPinnedSets(saved.pinnedSets);
       setSetFilters(saved.setFilters);
       setAllowTuning(saved.allowTuning);
+      setUseLegacyExotics(saved.legacyExotics);
       setActiveSubclass(saved.activeSubclass);
       setFragSel(fragSelFromArrays(saved.fragSel));
       if (saved.classType !== null) setClassType(saved.classType);
@@ -221,14 +223,15 @@ export function BuilderPanel({
     [armory, classType],
   );
 
-  // Candidate pool for the optimizer. Legacy (non-Tier-5) armor is excluded by default;
-  // Tier-5 pieces are exactly those with a tuning socket (tunedStat set).
+  // Candidate pool for the optimizer: Tier-5 pieces (exactly those with a tuning
+  // socket) plus — when enabled — legacy/non-tunable exotics, whose artifice +3 the
+  // solver spends. Legacy legendaries stay excluded until supported.
   const pool = useMemo(
     () =>
-      useLegacyArmor
-        ? classPieces
-        : classPieces.filter((p) => p.tunedStat !== undefined),
-    [classPieces, useLegacyArmor],
+      classPieces.filter(
+        (p) => p.tunedStat !== undefined || (useLegacyExotics && p.isExotic),
+      ),
+    [classPieces, useLegacyExotics],
   );
 
   const pieceMap = useMemo(
@@ -432,6 +435,7 @@ export function BuilderPanel({
         exoticName:
           selectedExotic === null ? null : (exotics[selectedExotic]?.name ?? null),
         allowTuning,
+        legacyExotics: useLegacyExotics,
         activeSubclass,
         fragSel: fragSelToArrays(fragSel),
       });
@@ -447,6 +451,7 @@ export function BuilderPanel({
     selectedExotic,
     exotics,
     allowTuning,
+    useLegacyExotics,
     activeSubclass,
     fragSel,
   ]);
@@ -462,6 +467,7 @@ export function BuilderPanel({
           exotic: p.isExotic,
           hash: p.itemHash,
           setHash: p.setHash,
+          artifice: p.isArtifice,
           tuning:
             p.tunedStat !== undefined
               ? { tuned: p.tunedStat, offStats: offArchetypeIndices(p.baseStats) }
@@ -878,19 +884,34 @@ export function BuilderPanel({
             </Section>
 
             <Section title="Armor pool">
-              <div className="flex items-center justify-between gap-4">
-                <div className="space-y-0.5">
-                  <span className="text-sm">Use legacy armor</span>
-                  <p className="text-muted-foreground text-xs">
-                    Coming soon — Armor 2.0 / artifice pieces. Builds currently use
-                    Tier-5 armor only.
-                  </p>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="space-y-0.5">
+                    <span className="text-sm">Legacy exotics</span>
+                    <p className="text-muted-foreground text-xs">
+                      Include Armor 2.0 exotics — the optimizer spends their
+                      artifice +3 automatically.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={useLegacyExotics}
+                    onCheckedChange={setUseLegacyExotics}
+                    aria-label="Include legacy exotics"
+                  />
                 </div>
-                <Switch
-                  checked={useLegacyArmor}
-                  disabled
-                  aria-label="Use legacy armor (coming soon)"
-                />
+                <div className="flex items-center justify-between gap-4">
+                  <div className="space-y-0.5">
+                    <span className="text-sm">Legacy legendaries</span>
+                    <p className="text-muted-foreground text-xs">
+                      Not possible yet.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={false}
+                    disabled
+                    aria-label="Include legacy legendaries (not possible yet)"
+                  />
+                </div>
               </div>
             </Section>
           </>
