@@ -5,8 +5,11 @@ import {
   tokenizeSearchQuery,
 } from "./search";
 
-test("tokenizeSearchQuery splits on whitespace and lowercases", () => {
+test("tokenizeSearchQuery splits on whitespace and normalizes tokens", () => {
   expect(tokenizeSearchQuery("  Ferro   Smoke ")).toEqual(["ferro", "smoke"]);
+  expect(tokenizeSearchQuery("Smoke-Jumper")).toEqual(["smokejumper"]);
+  // Punctuation-only tokens vanish instead of matching everything.
+  expect(tokenizeSearchQuery("-- ferro")).toEqual(["ferro"]);
   expect(tokenizeSearchQuery("")).toEqual([]);
 });
 

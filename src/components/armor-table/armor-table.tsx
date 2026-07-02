@@ -2,6 +2,8 @@
 
 import Image from "next/image";
 import {
+  memo,
+  useCallback,
   useDeferredValue,
   useEffect,
   useMemo,
@@ -13,7 +15,7 @@ import { CaretDown, CaretUp, MagnifyingGlass, X } from "@phosphor-icons/react";
 import { useArmory } from "@/lib/armory/use-armory";
 import { useManifest } from "@/lib/manifest/use-manifest";
 import { availableSets } from "@/lib/armory/sets";
-import type { ArmorPiece, ArmorLocation } from "@/lib/armory/normalize";
+import type { ArmorPiece } from "@/lib/armory/normalize";
 import type { ArmoryCharacter } from "@/lib/armory/fetch";
 import { BUNGIE_IMAGE_BASE } from "@/lib/bungie/constants";
 import {
@@ -24,19 +26,23 @@ import {
   STAT_LABELS,
   STAT_ORDER,
   tertiaryStatIndex,
-  type StatKey,
 } from "@/lib/armory/stats";
 import {
   DEFAULT_SORT,
   emptyFacets,
   hasActiveFilters,
   pieceMatchesFilters,
-  type ColumnKey,
   type FacetFilters,
   type SortKey,
   type SortState,
   type TuningFilter,
 } from "@/lib/armor-table/filters";
+import {
+  DESC_FIRST,
+  LOCATION_LABELS,
+  compareRows,
+  statLabel,
+} from "@/lib/armor-table/sort";
 import { tokenizeSearchQuery } from "@/lib/armor-table/search";
 import {
   TABLE_SCHEMA_VERSION,
@@ -55,12 +61,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ArmorRowActions } from "@/components/armor-table/armor-row-actions";
-
-const LOCATION_LABELS: Record<ArmorLocation, string> = {
-  equipped: "Equipped",
-  inventory: "Inventory",
-  vault: "Vault",
-};
 
 /** Approximate single-row height; the virtualizer remeasures real rows on mount. */
 const ESTIMATED_ROW_HEIGHT_PX = 38;
@@ -90,53 +90,6 @@ interface Row {
   setName?: string;
   /** Tertiary archetype stat index — Armor 3.0 pieces only. */
   tertiary?: number;
-}
-
-const statLabel = (index: number) => STAT_LABELS[STAT_ORDER[index]];
-
-function sortValue(row: Row, key: SortKey): string | number | undefined {
-  if (key.startsWith("stat-")) {
-    const statKey = key.slice("stat-".length) as StatKey;
-    return row.piece.stats[STAT_ORDER.indexOf(statKey)];
-  }
-  switch (key as ColumnKey) {
-    case "name":
-      return row.piece.name;
-    case "class":
-      return CLASS_NAMES[row.piece.classType];
-    case "slot":
-      return ARMOR_SLOTS.indexOf(row.piece.slot); // game order, not alphabetical
-    case "archetype":
-      return row.piece.archetype;
-    case "tertiary":
-      return row.tertiary !== undefined ? statLabel(row.tertiary) : undefined;
-    case "tuned":
-      return row.piece.tunedStat !== undefined
-        ? statLabel(row.piece.tunedStat)
-        : undefined;
-    case "set":
-      return row.setName;
-    case "location":
-      return LOCATION_LABELS[row.piece.location];
-    default: {
-      const exhaustive: never = key as never;
-      return exhaustive;
-    }
-  }
-}
-
-function compareRows(a: Row, b: Row, sort: SortState): number {
-  const va = sortValue(a, sort.key);
-  const vb = sortValue(b, sort.key);
-  // Missing values ("—") always sort last, regardless of direction.
-  if (va === undefined && vb === undefined) return 0;
-  if (va === undefined) return 1;
-  if (vb === undefined) return -1;
-  const cmp =
-    typeof va === "number" && typeof vb === "number"
-      ? va - vb
-      : String(va).localeCompare(String(vb));
-  return sort.asc ? cmp : -cmp;
 }
 
 interface FilterOption<V> {
@@ -237,9 +190,6 @@ function SortHeader({
     </th>
   );
 }
-
-/** Stat columns default to descending (high rolls first); text columns to ascending. */
-const DESC_FIRST = new Set<SortKey>(STAT_ORDER.map((key) => `stat-${key}` as const));
 
 export function ArmorTable() {
   const armory = useArmory();
@@ -390,7 +340,9 @@ export function ArmorTable() {
       ? totalSize - virtualRows[virtualRows.length - 1].end
       : 0;
 
-  const refresh = () => void armory.refetch();
+  // Stable identity so memoized rows don't re-render when unrelated state changes.
+  const { refetch } = armory;
+  const refresh = useCallback(() => void refetch(), [refetch]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -542,7 +494,7 @@ export function ArmorTable() {
   );
 }
 
-function ArmorRow({
+const ArmorRow = memo(function ArmorRow({
   row,
   characters,
   onRefresh,
@@ -617,4 +569,4 @@ function ArmorRow({
       </td>
     </tr>
   );
-}
+});

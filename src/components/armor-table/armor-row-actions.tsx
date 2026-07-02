@@ -7,28 +7,14 @@ import { toast } from "sonner";
 import type { ArmorPiece } from "@/lib/armory/normalize";
 import type { ArmoryCharacter } from "@/lib/armory/fetch";
 import { CLASS_NAMES } from "@/lib/armory/stats";
+import {
+  equipItemRef,
+  lastPlayedCharacter,
+  postEquipRequest,
+} from "@/lib/bungie/equip-client";
 import { Button } from "@/components/ui/button";
 
 type Action = "move" | "equip";
-
-/** Per-item outcome from POST /api/bungie/equip. */
-interface EquipResult {
-  itemInstanceId: string;
-  ok: boolean;
-  message?: string;
-}
-
-/** The most recently played character matching the piece's class. */
-export function targetCharacterFor(
-  piece: ArmorPiece,
-  characters: ArmoryCharacter[],
-): ArmoryCharacter | undefined {
-  return characters
-    .filter((c) => c.classType === piece.classType)
-    .sort(
-      (a, b) => Date.parse(b.dateLastPlayed) - Date.parse(a.dateLastPlayed),
-    )[0];
-}
 
 function moveDisabledReason(
   piece: ArmorPiece,
@@ -72,7 +58,7 @@ export function ArmorRowActions({
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState<Action | null>(null);
 
-  const target = targetCharacterFor(piece, characters);
+  const target = lastPlayedCharacter(characters, piece.classType);
   const reasons: Record<Action, string | null> = {
     move: moveDisabledReason(piece, target),
     equip: equipDisabledReason(piece, target),
@@ -82,39 +68,20 @@ export function ArmorRowActions({
     if (!target || busy) return;
     setBusy(action);
     try {
-      const res = await fetch("/api/bungie/equip", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const results = await postEquipRequest(
+        {
           characterId: target.id,
           mode: action,
-          items: [
-            {
-              itemInstanceId: piece.instanceId,
-              itemHash: piece.itemHash,
-              location: piece.location,
-              characterId: piece.characterId,
-            },
-          ],
-        }),
-      });
-      const data = (await res.json()) as {
-        results?: EquipResult[];
-        error?: string;
-        reauth?: boolean;
-      };
+          items: [equipItemRef(piece)],
+        },
+        {
+          queryClient,
+          failureMessage: `${action === "move" ? "Move" : "Equip"} failed`,
+        },
+      );
+      if (!results) return;
 
-      if (!res.ok) {
-        toast.error(data.error ?? `${action === "move" ? "Move" : "Equip"} failed`);
-        // The server cleared the stale (pre-scope or expired) session; surfacing
-        // the session query brings back the sign-in card.
-        if (data.reauth) {
-          void queryClient.invalidateQueries({ queryKey: ["session"] });
-        }
-        return;
-      }
-
-      const result = data.results?.[0];
+      const result = results[0];
       const className = CLASS_NAMES[piece.classType] ?? "character";
       if (result?.ok) {
         toast.success(

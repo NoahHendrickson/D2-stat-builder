@@ -3,12 +3,16 @@
 // both Ferropotent and Smokejumper pieces — and each token matches by normalized
 // substring, falling back to ordered subsequence (typo-tolerant partial typing).
 
-/** Split a search box value into lowercase tokens (whitespace-separated). */
+/**
+ * Split a search box value into normalized tokens (whitespace-separated).
+ * Normalizing here — once per query, not once per piece — keeps the filter
+ * pass from re-normalizing the same token against every name.
+ */
 export function tokenizeSearchQuery(query: string): string[] {
   return query
     .trim()
-    .toLowerCase()
     .split(/\s+/)
+    .map(normalizeSearchText)
     .filter((t) => t.length > 0);
 }
 
@@ -19,10 +23,11 @@ export function normalizeSearchText(text: string): string {
 
 /**
  * Loose match for armor names: normalized substring, then ordered subsequence
- * (typo-tolerant partial typing, e.g. "frpot" → "Ferropotent").
+ * (typo-tolerant partial typing, e.g. "frpot" → "Ferropotent"). `token` must
+ * already be normalized (tokenizeSearchQuery output).
  */
 export function looseNameMatch(token: string, name: string): boolean {
-  const t = normalizeSearchText(token);
+  const t = token;
   const n = normalizeSearchText(name);
   if (t.length === 0) return true;
   if (n.length === 0) return false;
