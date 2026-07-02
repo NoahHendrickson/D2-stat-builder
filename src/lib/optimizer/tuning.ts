@@ -45,6 +45,15 @@ export interface InternalPiece {
   tuneTotalUpside: number;
 }
 
+/**
+ * Points needed to close deficit `d` in a joint-feasibility bound. Stat mods come in
+ * 5-point grains, so the deficit rounds up — unless free artifice (+3) mods are
+ * reachable, which break the grain; then the raw deficit is the only admissible bound.
+ * Every joint prune (searcher, top-N, ceiling probes) must use this one definition.
+ */
+export const deficitPoints = (d: number, artificeReachable: boolean): number =>
+  artificeReachable ? d : Math.ceil(d / 5) * 5;
+
 function statTotal(stats: number[]): number {
   let t = 0;
   for (let i = 0; i < NUM_STATS; i++) t += stats[i];
@@ -304,6 +313,31 @@ export function createTuningSearcher(
     };
   };
 
+  /**
+   * Finish a leaf whose mods were assigned: record the covering artifice points into
+   * the `artificePoints` scratch, dump leftovers in maximize mode, and return the
+   * leaf's clamped total. Shared by the Balanced fast path and the slow-path leaf so
+   * the two can't drift (this module exists because two copies of this search once did).
+   */
+  const settleLeaf = (
+    asg: NonNullable<ReturnType<typeof assignMods>>,
+    artCount: number,
+    mode: TuningMode,
+  ): number => {
+    for (let s = 0; s < NUM_STATS; s++) artificePoints[s] = asg.artificePoints[s];
+    if (mode === "maximize") {
+      // `deficits` is dead once assignMods succeeded — reuse it as the dump's
+      // clamp base (aug + assigned mod points).
+      for (let s = 0; s < NUM_STATS; s++) deficits[s] = aug[s] + asg.points[s];
+      dumpArtifice(deficits, artificePoints, artCount - asg.usedArtifice);
+    }
+    let total = 0;
+    for (let s = 0; s < NUM_STATS; s++) {
+      total += clamp(aug[s] + asg.points[s] + artificePoints[s]);
+    }
+    return total;
+  };
+
   return (chosen, sum, mins, mode) => {
     let artCount = 0;
     for (let i = 0; i < NUM_SLOTS; i++) if (chosen[i].artifice) artCount++;
@@ -324,20 +358,10 @@ export function createTuningSearcher(
     if (balAsg) {
       const tuningBonus = new Array<number>(NUM_STATS);
       for (let s = 0; s < NUM_STATS; s++) {
-        artificePoints[s] = balAsg.artificePoints[s];
         tuningBonus[s] = aug[s] - sum[s] - frag[s];
       }
-      if (mode === "maximize") {
-        // `deficits` is dead here — reuse it as the dump's clamp base (aug + mods).
-        for (let s = 0; s < NUM_STATS; s++) deficits[s] = aug[s] + balAsg.points[s];
-        dumpArtifice(deficits, artificePoints, artCount - balAsg.usedArtifice);
-      }
-      let total = 0;
-      for (let s = 0; s < NUM_STATS; s++) {
-        total += clamp(aug[s] + balAsg.points[s] + artificePoints[s]);
-      }
       return makeOutcome(chosen, sum, {
-        total,
+        total: settleLeaf(balAsg, artCount, mode),
         modBonus: balAsg.points.slice(),
         usedMajor: balAsg.usedMajor,
         usedMinor: balAsg.usedMinor,
@@ -370,13 +394,11 @@ export function createTuningSearcher(
       // SHARED budget, this branch is dead. The top-N bounds are per-stat, so this
       // joint check is what cuts the demanding-target cliff, and it's what keeps
       // UNsatisfiable ceiling probes from degenerating into exhaustive walks.
-      // Artifice breaks the 5-point mod grain, so the rounding only applies when the
-      // loadout has none (keeping the old bound's full strength for the common case).
       let needed = 0;
       for (let s = 0; s < NUM_STATS; s++) {
         const d = mins[s] - (aug[s] + suffixUp[i][s]);
         if (d > 0) {
-          needed += artCount === 0 ? Math.ceil(d / 5) * 5 : d;
+          needed += deficitPoints(d, artCount > 0);
           if (needed > maxLeafPoints) return;
         }
       }
@@ -396,18 +418,7 @@ export function createTuningSearcher(
         }
         const asg = assignMods(deficits, mods.major, mods.minor, artCount);
         if (!asg) return;
-        for (let s = 0; s < NUM_STATS; s++) {
-          artificePoints[s] = asg.artificePoints[s];
-        }
-        if (mode === "maximize") {
-          // `deficits` is dead here — reuse it as the dump's clamp base (aug + mods).
-          for (let s = 0; s < NUM_STATS; s++) deficits[s] = aug[s] + asg.points[s];
-          dumpArtifice(deficits, artificePoints, artCount - asg.usedArtifice);
-        }
-        let total = 0;
-        for (let s = 0; s < NUM_STATS; s++) {
-          total += clamp(aug[s] + asg.points[s] + artificePoints[s]);
-        }
+        const total = settleLeaf(asg, artCount, mode);
         if (!box.winner || total > box.winner.total) {
           const tuningBonus = new Array<number>(NUM_STATS);
           for (let s = 0; s < NUM_STATS; s++) {

@@ -475,7 +475,9 @@ export function BuilderPanel({
           exotic: p.isExotic,
           hash: p.itemHash,
           setHash: p.setHash,
-          artifice: p.isArtifice,
+          // Artifice is legacy-only, tuning Tier-5-only; enforce the exclusivity here
+          // (the solver stays general, the results UI shares one column for both).
+          artifice: p.isArtifice && p.tunedStat === undefined,
           tuning:
             p.tunedStat !== undefined
               ? { tuned: p.tunedStat, offStats: offArchetypeIndices(p.baseStats) }
