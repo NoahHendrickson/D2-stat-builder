@@ -116,41 +116,69 @@ export function makeInternalPiece(
 }
 
 /**
- * Cheapest assignment of major (+10) / minor (+5) stat mods covering every stat's
- * deficit within the budget. Returns per-stat points + counts, or null if infeasible.
+ * Cheapest assignment of major (+10) / minor (+5) stat mods — plus free artifice (+3)
+ * mods from artifice pieces — covering every stat's deficit within the budgets.
+ * Covering prefers majors, then minors, then artifice: an artifice mod left unspent
+ * here is worth a full +3 to the maximize dump, while a stat mod left unspent is worth
+ * nothing (mods are only ever socketed to cover targets). Returns per-stat mod points,
+ * artifice points, and counts, or null if infeasible.
  */
 export function assignMods(
   deficits: number[],
   maxMajor: number,
   maxMinor: number,
-): { points: number[]; usedMajor: number; usedMinor: number } | null {
+  maxArtifice = 0,
+): {
+  points: number[];
+  usedMajor: number;
+  usedMinor: number;
+  artificePoints: number[];
+  usedArtifice: number;
+} | null {
   const major = new Array(NUM_STATS).fill(0);
   const minor = new Array(NUM_STATS).fill(0);
+  const artifice = new Array(NUM_STATS).fill(0);
 
-  const rec = (s: number, majorsLeft: number, minorsLeft: number): boolean => {
+  const rec = (
+    s: number,
+    majorsLeft: number,
+    minorsLeft: number,
+    artLeft: number,
+  ): boolean => {
     if (s === NUM_STATS) return true;
     const need = deficits[s];
-    if (need <= 0) return rec(s + 1, majorsLeft, minorsLeft);
+    if (need <= 0) return rec(s + 1, majorsLeft, minorsLeft, artLeft);
     const maxA = Math.min(majorsLeft, Math.ceil(need / 10));
     for (let a = maxA; a >= 0; a--) {
-      const remainder = need - a * 10;
-      const b = remainder > 0 ? Math.ceil(remainder / 5) : 0;
-      if (b > minorsLeft) continue;
-      major[s] = a;
-      minor[s] = b;
-      if (rec(s + 1, majorsLeft - a, minorsLeft - b)) return true;
+      const afterMajor = need - a * 10;
+      const maxC = Math.min(
+        artLeft,
+        afterMajor > 0 ? Math.ceil(afterMajor / 3) : 0,
+      );
+      for (let c = 0; c <= maxC; c++) {
+        const remainder = afterMajor - c * 3;
+        const b = remainder > 0 ? Math.ceil(remainder / 5) : 0;
+        if (b > minorsLeft) continue;
+        major[s] = a;
+        minor[s] = b;
+        artifice[s] = c;
+        if (rec(s + 1, majorsLeft - a, minorsLeft - b, artLeft - c)) return true;
+      }
     }
     major[s] = 0;
     minor[s] = 0;
+    artifice[s] = 0;
     return false;
   };
 
-  if (!rec(0, maxMajor, maxMinor)) return null;
+  if (!rec(0, maxMajor, maxMinor, maxArtifice)) return null;
   const points = major.map((a, i) => a * 10 + minor[i] * 5);
   return {
     points,
     usedMajor: major.reduce((x, y) => x + y, 0),
     usedMinor: minor.reduce((x, y) => x + y, 0),
+    artificePoints: artifice.map((c: number) => c * ARTIFICE_MOD_BONUS),
+    usedArtifice: artifice.reduce((x: number, y: number) => x + y, 0),
   };
 }
 

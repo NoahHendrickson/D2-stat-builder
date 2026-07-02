@@ -14,6 +14,8 @@ describe("assignMods", () => {
       points: [0, 0, 0, 0, 0, 0],
       usedMajor: 0,
       usedMinor: 0,
+      artificePoints: [0, 0, 0, 0, 0, 0],
+      usedArtifice: 0,
     });
   });
 
@@ -23,6 +25,8 @@ describe("assignMods", () => {
       points: [10, 0, 0, 0, 0, 0],
       usedMajor: 1,
       usedMinor: 0,
+      artificePoints: [0, 0, 0, 0, 0, 0],
+      usedArtifice: 0,
     });
   });
 
@@ -41,6 +45,8 @@ describe("assignMods", () => {
       points: [5, 0, 0, 0, 0, 0],
       usedMajor: 0,
       usedMinor: 1,
+      artificePoints: [0, 0, 0, 0, 0, 0],
+      usedArtifice: 0,
     });
   });
 
@@ -58,6 +64,8 @@ describe("assignMods", () => {
       points: [5, 10, 0, 0, 0, 0],
       usedMajor: 1,
       usedMinor: 1,
+      artificePoints: [0, 0, 0, 0, 0, 0],
+      usedArtifice: 0,
     });
   });
 
@@ -68,8 +76,64 @@ describe("assignMods", () => {
       points: [10, 10, 10, 5, 5, 0],
       usedMajor: 3,
       usedMinor: 2,
+      artificePoints: [0, 0, 0, 0, 0, 0],
+      usedArtifice: 0,
     });
     expect(assignMods([10, 10, 10, 5, 5, 5], 3, 2)).toBeNull();
+  });
+
+  test("artifice: a 3-point deficit is covered by one artifice mod, zero stat mods", () => {
+    const out = assignMods([3, 0, 0, 0, 0, 0], 0, 0, 1);
+    expect(out).toEqual({
+      points: [0, 0, 0, 0, 0, 0],
+      usedMajor: 0,
+      usedMinor: 0,
+      artificePoints: [3, 0, 0, 0, 0, 0],
+      usedArtifice: 1,
+    });
+  });
+
+  test("artifice unlocks a deficit the mod budget alone can't cover", () => {
+    // 13 needs 10+3: one major + one artifice. Without artifice it's null.
+    expect(assignMods([13, 0, 0, 0, 0, 0], 1, 0, 0)).toBeNull();
+    const out = assignMods([13, 0, 0, 0, 0, 0], 1, 0, 1);
+    expect(out).toEqual({
+      points: [10, 0, 0, 0, 0, 0],
+      usedMajor: 1,
+      usedMinor: 0,
+      artificePoints: [3, 0, 0, 0, 0, 0],
+      usedArtifice: 1,
+    });
+  });
+
+  test("mods are preferred over artifice when either could cover", () => {
+    // One minor (+5) covers the 5-point deficit; the artifice mod stays unspent
+    // (worth more later as a full +3 to the maximize dump).
+    const out = assignMods([5, 0, 0, 0, 0, 0], 0, 1, 1);
+    expect(out).toEqual({
+      points: [5, 0, 0, 0, 0, 0],
+      usedMajor: 0,
+      usedMinor: 1,
+      artificePoints: [0, 0, 0, 0, 0, 0],
+      usedArtifice: 0,
+    });
+  });
+
+  test("backtracking across resources: artifice must move to the stat mods can't reach", () => {
+    // Budget: 1 minor + 1 artifice. Deficits [3, 5]: the minor must go to stat 1
+    // (5 > 3 points), artifice to stat 0 — a minor-on-0 greedy would strand stat 1.
+    const out = assignMods([3, 5, 0, 0, 0, 0], 0, 1, 1);
+    expect(out).toEqual({
+      points: [0, 5, 0, 0, 0, 0],
+      usedMajor: 0,
+      usedMinor: 1,
+      artificePoints: [3, 0, 0, 0, 0, 0],
+      usedArtifice: 1,
+    });
+  });
+
+  test("infeasible even with artifice", () => {
+    expect(assignMods([9, 0, 0, 0, 0, 0], 0, 1, 1)).toBeNull(); // 5+3=8 < 9
   });
 });
 
