@@ -54,6 +54,15 @@ export interface InternalPiece {
 export const deficitPoints = (d: number, artificeReachable: boolean): number =>
   artificeReachable ? d : Math.ceil(d / 5) * 5;
 
+/**
+ * Shared results for the overwhelmingly common zero-artifice leaf (every all-Tier-5
+ * loadout hits assignMods/settleLeaf once per combo, so the zero path must stay
+ * allocation-free). Consumers treat outcome arrays as immutable — never write into
+ * these. (Worker results are structured-cloned before the UI sees them.)
+ */
+const ZERO_ARTIFICE_POINTS: number[] = [0, 0, 0, 0, 0, 0];
+const NO_ARTIFICE_SLOTS: (number | null)[] = [null, null, null, null, null];
+
 function statTotal(stats: number[]): number {
   let t = 0;
   for (let i = 0; i < NUM_STATS; i++) t += stats[i];
@@ -146,9 +155,42 @@ export function assignMods(
 } | null {
   const major = new Array(NUM_STATS).fill(0);
   const minor = new Array(NUM_STATS).fill(0);
-  const artifice = new Array(NUM_STATS).fill(0);
 
-  const rec = (
+  // Zero-artifice recursion, kept as a separate loop shape on purpose: it runs once
+  // per enumerated combo (the solver's hottest call), so it must cost exactly what it
+  // did before artifice existed. The three-resource variant below is the same search
+  // with the artifice dimension added — a fix to one covering rule belongs in BOTH.
+  const rec2 = (s: number, majorsLeft: number, minorsLeft: number): boolean => {
+    if (s === NUM_STATS) return true;
+    const need = deficits[s];
+    if (need <= 0) return rec2(s + 1, majorsLeft, minorsLeft);
+    const maxA = Math.min(majorsLeft, Math.ceil(need / 10));
+    for (let a = maxA; a >= 0; a--) {
+      const remainder = need - a * 10;
+      const b = remainder > 0 ? Math.ceil(remainder / 5) : 0;
+      if (b > minorsLeft) continue;
+      major[s] = a;
+      minor[s] = b;
+      if (rec2(s + 1, majorsLeft - a, minorsLeft - b)) return true;
+    }
+    major[s] = 0;
+    minor[s] = 0;
+    return false;
+  };
+
+  if (maxArtifice === 0) {
+    if (!rec2(0, maxMajor, maxMinor)) return null;
+    return {
+      points: major.map((a, i) => a * 10 + minor[i] * 5),
+      usedMajor: major.reduce((x, y) => x + y, 0),
+      usedMinor: minor.reduce((x, y) => x + y, 0),
+      artificePoints: ZERO_ARTIFICE_POINTS, // shared — treated as immutable
+      usedArtifice: 0,
+    };
+  }
+
+  const artifice = new Array(NUM_STATS).fill(0);
+  const rec3 = (
     s: number,
     majorsLeft: number,
     minorsLeft: number,
@@ -156,7 +198,7 @@ export function assignMods(
   ): boolean => {
     if (s === NUM_STATS) return true;
     const need = deficits[s];
-    if (need <= 0) return rec(s + 1, majorsLeft, minorsLeft, artLeft);
+    if (need <= 0) return rec3(s + 1, majorsLeft, minorsLeft, artLeft);
     const maxA = Math.min(majorsLeft, Math.ceil(need / 10));
     for (let a = maxA; a >= 0; a--) {
       const afterMajor = need - a * 10;
@@ -171,7 +213,7 @@ export function assignMods(
         major[s] = a;
         minor[s] = b;
         artifice[s] = c;
-        if (rec(s + 1, majorsLeft - a, minorsLeft - b, artLeft - c)) return true;
+        if (rec3(s + 1, majorsLeft - a, minorsLeft - b, artLeft - c)) return true;
       }
     }
     major[s] = 0;
@@ -180,10 +222,9 @@ export function assignMods(
     return false;
   };
 
-  if (!rec(0, maxMajor, maxMinor, maxArtifice)) return null;
-  const points = major.map((a, i) => a * 10 + minor[i] * 5);
+  if (!rec3(0, maxMajor, maxMinor, maxArtifice)) return null;
   return {
-    points,
+    points: major.map((a, i) => a * 10 + minor[i] * 5),
     usedMajor: major.reduce((x, y) => x + y, 0),
     usedMinor: minor.reduce((x, y) => x + y, 0),
     artificePoints: artifice.map((c: number) => c * ARTIFICE_MOD_BONUS),
@@ -281,10 +322,13 @@ export function createTuningSearcher(
     chosen: InternalPiece[],
     art: number[],
   ): (number | null)[] => {
+    // Nothing spent (the common zero-artifice leaf) — share, don't allocate.
+    if (art === ZERO_ARTIFICE_POINTS) return NO_ARTIFICE_SLOTS;
     const queue: number[] = [];
     for (let s = 0; s < NUM_STATS; s++) {
       for (let n = 0; n < art[s] / ARTIFICE_MOD_BONUS; n++) queue.push(s);
     }
+    if (queue.length === 0) return NO_ARTIFICE_SLOTS;
     return Array.from({ length: NUM_SLOTS }, (_, i) =>
       chosen[i].artifice && queue.length ? (queue.shift() as number) : null,
     );
@@ -324,6 +368,15 @@ export function createTuningSearcher(
     artCount: number,
     mode: TuningMode,
   ): number => {
+    let total = 0;
+    if (artCount === 0) {
+      // The overwhelmingly common leaf (all-Tier-5 loadout): identical math to the
+      // pre-artifice solver, nothing extra touched.
+      for (let s = 0; s < NUM_STATS; s++) {
+        total += clamp(aug[s] + asg.points[s]);
+      }
+      return total;
+    }
     for (let s = 0; s < NUM_STATS; s++) artificePoints[s] = asg.artificePoints[s];
     if (mode === "maximize") {
       // `deficits` is dead once assignMods succeeded — reuse it as the dump's
@@ -331,7 +384,6 @@ export function createTuningSearcher(
       for (let s = 0; s < NUM_STATS; s++) deficits[s] = aug[s] + asg.points[s];
       dumpArtifice(deficits, artificePoints, artCount - asg.usedArtifice);
     }
-    let total = 0;
     for (let s = 0; s < NUM_STATS; s++) {
       total += clamp(aug[s] + asg.points[s] + artificePoints[s]);
     }
@@ -367,7 +419,9 @@ export function createTuningSearcher(
         usedMinor: balAsg.usedMinor,
         applied: curApplied.slice(),
         tuningBonus,
-        artificeBonus: artificePoints.slice(),
+        // settleLeaf leaves the artifice scratch untouched on the zero path — share.
+        artificeBonus:
+          artCount === 0 ? ZERO_ARTIFICE_POINTS : artificePoints.slice(),
       });
     }
 
@@ -431,7 +485,9 @@ export function createTuningSearcher(
             usedMinor: asg.usedMinor,
             applied: curApplied.slice(),
             tuningBonus,
-            artificeBonus: artificePoints.slice(),
+            // settleLeaf leaves the artifice scratch untouched on the zero path — share.
+            artificeBonus:
+              artCount === 0 ? ZERO_ARTIFICE_POINTS : artificePoints.slice(),
           };
         }
         return;

@@ -141,6 +141,22 @@ function makeJointMinCheck(
   maxModPoints: number,
   chosenArt: { n: number },
 ): (k: number) => boolean {
+  // Pool has no artifice pieces at all (artSuffix[0] counts every slot): specialize to
+  // the flat-budget bound so the per-node cost of these hot walks is exactly what it
+  // was before artifice existed.
+  if (artSuffix[0] === 0) {
+    return (k) => {
+      let needed = 0;
+      for (let s = 0; s < NUM_STATS; s++) {
+        const d = mins[s] - (sum[s] + frag[s] + sumTuneUp[s] + suffixStat[k][s]);
+        if (d > 0) {
+          needed += deficitPoints(d, false);
+          if (needed > maxModPoints) return false;
+        }
+      }
+      return true;
+    };
+  }
   return (k) => {
     const artUp = chosenArt.n + artSuffix[k];
     const budget = maxModPoints + artUp * 3;
