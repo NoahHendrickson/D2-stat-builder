@@ -196,6 +196,10 @@ export interface TuningOutcome {
   applied: (AppliedTuning | null)[];
   modBonus: number[];
   modsUsed: { major: number; minor: number };
+  /** Points each stat gained from artifice +3 mods (covering + maximize dump). */
+  artificeBonus: number[];
+  /** Per slot: the stat the piece's artifice +3 went to (null = not artifice / unspent). */
+  artifice: (number | null)[];
 }
 
 /**
@@ -225,6 +229,7 @@ export function createTuningSearcher(
   // Which stats Balanced left short (so a directional on a piece tuned to that stat can help).
   const shortStat: boolean[] = new Array(NUM_STATS).fill(false);
   const curApplied: (AppliedTuning | null)[] = new Array(NUM_SLOTS).fill(null);
+  const artificePoints = new Array(NUM_STATS).fill(0);
   // suffixUp[i][s] = max tuning upside to stat s reachable from chosen pieces i..4.
   const suffixUp: number[][] = Array.from({ length: NUM_SLOTS + 1 }, () =>
     new Array(NUM_STATS).fill(0),
@@ -237,12 +242,55 @@ export function createTuningSearcher(
     usedMinor: number;
     applied: (AppliedTuning | null)[];
     tuningBonus: number[];
+    artificeBonus: number[];
   }
 
-  const makeOutcome = (sum: number[], w: Winner): TuningOutcome => {
+  /**
+   * Maximize-mode leftover dump: every unspent artifice mod is worth +3 to the total
+   * (artifice is free and piece-intrinsic — it is always socketed in practice), so
+   * dump each into the stat with the most headroom below the cap. Mutates `art`
+   * in place; `base` is the stat value before artifice.
+   */
+  const dumpArtifice = (base: number[], art: number[], leftovers: number): void => {
+    for (let n = 0; n < leftovers; n++) {
+      let best = -1;
+      let bestRoom = 0;
+      for (let s = 0; s < NUM_STATS; s++) {
+        const room = STAT_CAP - (base[s] + art[s]);
+        if (room > bestRoom) {
+          bestRoom = room;
+          best = s;
+        }
+      }
+      if (best < 0) return; // everything capped — stop dumping
+      art[best] += ARTIFICE_MOD_BONUS;
+    }
+  };
+
+  /** Per-slot artifice picks from the per-stat points: hand stats out to artifice pieces in slot order. */
+  const artificeSlots = (
+    chosen: InternalPiece[],
+    art: number[],
+  ): (number | null)[] => {
+    const queue: number[] = [];
+    for (let s = 0; s < NUM_STATS; s++) {
+      for (let n = 0; n < art[s] / ARTIFICE_MOD_BONUS; n++) queue.push(s);
+    }
+    return Array.from({ length: NUM_SLOTS }, (_, i) =>
+      chosen[i].artifice && queue.length ? (queue.shift() as number) : null,
+    );
+  };
+
+  const makeOutcome = (
+    chosen: InternalPiece[],
+    sum: number[],
+    w: Winner,
+  ): TuningOutcome => {
     const stats = new Array<number>(NUM_STATS);
     for (let s = 0; s < NUM_STATS; s++) {
-      stats[s] = clamp(sum[s] + frag[s] + w.tuningBonus[s] + w.modBonus[s]);
+      stats[s] = clamp(
+        sum[s] + frag[s] + w.tuningBonus[s] + w.modBonus[s] + w.artificeBonus[s],
+      );
     }
     return {
       total: w.total,
@@ -251,10 +299,15 @@ export function createTuningSearcher(
       applied: w.applied,
       modBonus: w.modBonus,
       modsUsed: { major: w.usedMajor, minor: w.usedMinor },
+      artificeBonus: w.artificeBonus,
+      artifice: artificeSlots(chosen, w.artificeBonus),
     };
   };
 
   return (chosen, sum, mins, mode) => {
+    let artCount = 0;
+    for (let i = 0; i < NUM_SLOTS; i++) if (chosen[i].artifice) artCount++;
+    const maxLeafPoints = maxModPoints + artCount * ARTIFICE_MOD_BONUS;
     // Fast path: Balanced on every tunable piece (tuneOpts[0] is Balanced, or the
     // no-tune option for a piece that can't be tuned). If that already clears the
     // minimums, it's this loadout's best tuning — return without touching directionals.
@@ -267,21 +320,30 @@ export function createTuningSearcher(
     for (let s = 0; s < NUM_STATS; s++) {
       deficits[s] = Math.max(0, mins[s] - aug[s]);
     }
-    const balAsg = assignMods(deficits, mods.major, mods.minor);
+    const balAsg = assignMods(deficits, mods.major, mods.minor, artCount);
     if (balAsg) {
       const tuningBonus = new Array<number>(NUM_STATS);
+      for (let s = 0; s < NUM_STATS; s++) {
+        artificePoints[s] = balAsg.artificePoints[s];
+        tuningBonus[s] = aug[s] - sum[s] - frag[s];
+      }
+      if (mode === "maximize") {
+        // `deficits` is dead here — reuse it as the dump's clamp base (aug + mods).
+        for (let s = 0; s < NUM_STATS; s++) deficits[s] = aug[s] + balAsg.points[s];
+        dumpArtifice(deficits, artificePoints, artCount - balAsg.usedArtifice);
+      }
       let total = 0;
       for (let s = 0; s < NUM_STATS; s++) {
-        tuningBonus[s] = aug[s] - sum[s] - frag[s];
-        total += clamp(aug[s] + balAsg.points[s]);
+        total += clamp(aug[s] + balAsg.points[s] + artificePoints[s]);
       }
-      return makeOutcome(sum, {
+      return makeOutcome(chosen, sum, {
         total,
         modBonus: balAsg.points.slice(),
         usedMajor: balAsg.usedMajor,
         usedMinor: balAsg.usedMinor,
         applied: curApplied.slice(),
         tuningBonus,
+        artificeBonus: artificePoints.slice(),
       });
     }
 
@@ -308,12 +370,14 @@ export function createTuningSearcher(
       // SHARED budget, this branch is dead. The top-N bounds are per-stat, so this
       // joint check is what cuts the demanding-target cliff, and it's what keeps
       // UNsatisfiable ceiling probes from degenerating into exhaustive walks.
+      // Artifice breaks the 5-point mod grain, so the rounding only applies when the
+      // loadout has none (keeping the old bound's full strength for the common case).
       let needed = 0;
       for (let s = 0; s < NUM_STATS; s++) {
         const d = mins[s] - (aug[s] + suffixUp[i][s]);
         if (d > 0) {
-          needed += Math.ceil(d / 5) * 5;
-          if (needed > maxModPoints) return;
+          needed += artCount === 0 ? Math.ceil(d / 5) * 5 : d;
+          if (needed > maxLeafPoints) return;
         }
       }
       // Branch-and-bound on the best reachable total (maximize only — feasible mode
@@ -322,7 +386,7 @@ export function createTuningSearcher(
       // total), seeding a strong bound that prunes directional branches.
       const w = box.winner;
       if (mode === "maximize" && w) {
-        let ub = maxModPoints;
+        let ub = maxLeafPoints;
         for (let s = 0; s < NUM_STATS; s++) ub += clamp(aug[s] + suffixUp[i][s]);
         if (ub <= w.total) return;
       }
@@ -330,10 +394,20 @@ export function createTuningSearcher(
         for (let s = 0; s < NUM_STATS; s++) {
           deficits[s] = Math.max(0, mins[s] - aug[s]);
         }
-        const asg = assignMods(deficits, mods.major, mods.minor);
+        const asg = assignMods(deficits, mods.major, mods.minor, artCount);
         if (!asg) return;
+        for (let s = 0; s < NUM_STATS; s++) {
+          artificePoints[s] = asg.artificePoints[s];
+        }
+        if (mode === "maximize") {
+          // `deficits` is dead here — reuse it as the dump's clamp base (aug + mods).
+          for (let s = 0; s < NUM_STATS; s++) deficits[s] = aug[s] + asg.points[s];
+          dumpArtifice(deficits, artificePoints, artCount - asg.usedArtifice);
+        }
         let total = 0;
-        for (let s = 0; s < NUM_STATS; s++) total += clamp(aug[s] + asg.points[s]);
+        for (let s = 0; s < NUM_STATS; s++) {
+          total += clamp(aug[s] + asg.points[s] + artificePoints[s]);
+        }
         if (!box.winner || total > box.winner.total) {
           const tuningBonus = new Array<number>(NUM_STATS);
           for (let s = 0; s < NUM_STATS; s++) {
@@ -346,6 +420,7 @@ export function createTuningSearcher(
             usedMinor: asg.usedMinor,
             applied: curApplied.slice(),
             tuningBonus,
+            artificeBonus: artificePoints.slice(),
           };
         }
         return;
@@ -368,6 +443,6 @@ export function createTuningSearcher(
     };
     rec(0);
 
-    return box.winner ? makeOutcome(sum, box.winner) : null;
+    return box.winner ? makeOutcome(chosen, sum, box.winner) : null;
   };
 }
