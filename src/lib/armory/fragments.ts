@@ -25,6 +25,58 @@ const CATEGORY_SUBCLASS: Record<string, Subclass> = {
   "shared.prism.fragments": "Prismatic",
 };
 
+/** STAT_ORDER indices for the old Mobility / Resilience / Recovery trio. */
+const CLASS_ABILITY_TRIO = [0, 1, 2] as const;
+
+/**
+ * Which Armor 3.0 stat receives a class-ability penalty/bonus for each classType
+ * (0 Titan, 1 Hunter, 2 Warlock). Pre-3.0: Resilience / Mobility / Recovery.
+ */
+export const CLASS_ABILITY_STAT_INDEX: Record<number, number> = {
+  0: 1, // Titan → Health
+  1: 0, // Hunter → Weapons
+  2: 2, // Warlock → Class
+};
+
+type InvestmentStat = {
+  statTypeHash: number;
+  value: number;
+  isConditionallyActive?: boolean;
+};
+
+/** Sum armor investment stats, resolving class-specific Mobility/Resilience/Recovery penalties. */
+export function buildFragmentStats(
+  investmentStats: InvestmentStat[] | undefined,
+  classType: number,
+): { stats: StatArray; touches: boolean } {
+  const stats: StatArray = [0, 0, 0, 0, 0, 0];
+  const trio: { idx: number; value: number }[] = [];
+  let touches = false;
+
+  for (const inv of investmentStats ?? []) {
+    const idx = STAT_HASH_TO_INDEX[inv.statTypeHash];
+    if (idx === undefined) continue;
+    touches = true;
+    if (
+      inv.isConditionallyActive &&
+      (CLASS_ABILITY_TRIO as readonly number[]).includes(idx)
+    ) {
+      trio.push({ idx, value: inv.value });
+      continue;
+    }
+    stats[idx] += inv.value;
+  }
+
+  if (trio.length >= 2) {
+    const pick = trio.find((t) => t.idx === CLASS_ABILITY_STAT_INDEX[classType]);
+    if (pick) stats[pick.idx] += pick.value;
+  } else {
+    for (const t of trio) stats[t.idx] += t.value;
+  }
+
+  return { stats, touches };
+}
+
 export interface FragmentInfo {
   hash: number;
   name: string;
@@ -42,6 +94,7 @@ export interface FragmentInfo {
  */
 export function availableFragments(
   manifest: Manifest,
+  classType: number,
 ): Record<Subclass, FragmentInfo[]> {
   const out: Record<Subclass, FragmentInfo[]> = {
     Arc: [],
@@ -59,15 +112,7 @@ export function availableFragments(
     const subclass = cat ? CATEGORY_SUBCLASS[cat] : undefined;
     if (!subclass) continue;
 
-    const stats: StatArray = [0, 0, 0, 0, 0, 0];
-    let touches = false;
-    for (const inv of def.investmentStats ?? []) {
-      const idx = STAT_HASH_TO_INDEX[inv.statTypeHash];
-      if (idx !== undefined) {
-        stats[idx] += inv.value;
-        touches = true;
-      }
-    }
+    const { stats, touches } = buildFragmentStats(def.investmentStats, classType);
     if (!touches) continue;
 
     out[subclass].push({

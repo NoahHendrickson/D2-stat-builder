@@ -325,8 +325,11 @@ export function BuilderPanel({
   }, [sets]);
 
   const fragments = useMemo(
-    () => (manifest ? availableFragments(manifest) : null),
-    [manifest],
+    () =>
+      manifest && classType !== null
+        ? availableFragments(manifest, classType)
+        : null,
+    [manifest, classType],
   );
 
   // DIM handoff lookups: plug hashes for general stat mods and directional
