@@ -1,0 +1,39 @@
+"use client";
+
+import { SignInCard } from "@/components/auth/sign-in-card";
+import { useSession } from "@/lib/auth/use-session";
+import { useArmory } from "@/lib/armory/use-armory";
+import { ArmoryStatus } from "@/components/armory/armory-status";
+import { ManifestStatus } from "@/components/manifest/manifest-status";
+import { ArmorTable } from "@/components/armor-table/armor-table";
+
+export function ArmorTablePageShell() {
+  const session = useSession();
+  const armory = useArmory();
+  const authed = session.data?.authenticated ?? false;
+
+  if (!authed) {
+    return (
+      <main className="mx-auto max-w-md px-6 py-6">
+        <SignInCard />
+      </main>
+    );
+  }
+
+  // While the manifest downloads / the armory loads, show the same status cards
+  // the builder uses instead of an empty table.
+  if (!armory.data) {
+    return (
+      <main className="mx-auto max-w-md space-y-4 px-6 py-6">
+        <ManifestStatus />
+        <ArmoryStatus />
+      </main>
+    );
+  }
+
+  return (
+    <main className="mx-auto max-w-7xl px-6 py-6 2xl:max-w-[calc(80rem+22rem+2rem)]">
+      <ArmorTable />
+    </main>
+  );
+}
