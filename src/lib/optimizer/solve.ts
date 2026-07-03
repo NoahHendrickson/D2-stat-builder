@@ -283,6 +283,13 @@ export interface SolveOptions {
    * and keeps its streamed ceilings from regressing below what the UI showed.
    */
   ceilingSeed?: number[];
+  /**
+   * Loadouts from a prior (shorter-budget) solve of this exact input, used to pre-fill
+   * the top-N heap so the deterministic walk's already-covered prefix is pruned by the
+   * admission bound instead of re-evaluated. MUST be valid loadouts for the SAME input
+   * — seeding with another query's builds would return them verbatim in the results.
+   */
+  heapSeed?: OptimizerLoadout[];
 }
 
 export function solve(
@@ -301,14 +308,7 @@ export function solve(
   const fragUpside = frag.reduce((a: number, v: number) => a + Math.max(0, v), 0);
   const reqs: SetRequirement[] = input.setRequirements ?? [];
   const exoticMode = input.exotic?.mode ?? "any";
-  const exoticHashes = input.exotic?.hashes;
   const needExotic = exoticMode === "require" || exoticMode === "specific";
-  // An exotic that counts toward the requirement (any for "require"; a chosen version for "specific").
-  const isChosenExotic = (p: InternalPiece): boolean =>
-    p.exotic &&
-    (exoticMode === "specific"
-      ? p.hash !== undefined && !!exoticHashes?.includes(p.hash)
-      : true);
 
   const slots = buildSlots(input);
   if (slots.length !== NUM_SLOTS || slots.some((s) => s.length === 0)) {
@@ -317,14 +317,29 @@ export function solve(
       combosTried: 0,
       combosValid: 0,
       ceilings: [0, 0, 0, 0, 0, 0],
+      ceilingsExact: true,
       capped: false,
     };
   }
 
+  // buildSlots pre-filtered constraint-ineligible exotics out of the pool, so every
+  // remaining exotic counts toward "require"/"specific" — the reachability predicate
+  // is just p.exotic (one eligibility rule, encoded once, in buildSlots).
   const { suffixStat, suffixTotal, setSuffix, exoticSuffix, artSuffix } =
-    computeSuffixBounds(slots, reqs, needExotic, isChosenExotic);
+    computeSuffixBounds(slots, reqs, needExotic, (p) => p.exotic);
 
   const heap = new TopNHeap(maxResults);
+  // Pre-seed from a prior pass over the SAME input (see SolveOptions.heapSeed): the
+  // heap starts full at that pass's running bests, so the admission bound immediately
+  // prunes the prefix the earlier pass already covered. seededKeys keeps the walk from
+  // re-inserting a seeded build as a duplicate (which would evict a unique one).
+  const seededKeys = new Set<string>();
+  if (opts.heapSeed) {
+    for (const lo of opts.heapSeed) {
+      heap.insert(lo);
+      seededKeys.add(lo.pieceIds.join("|"));
+    }
+  }
   const sum = new Array(NUM_STATS).fill(0);
   // Best tuning upside per stat from the pieces chosen so far (for canReachMin).
   const sumTuneUp = new Array(NUM_STATS).fill(0);
@@ -405,8 +420,10 @@ export function solve(
       combosValid++;
 
       if (heap.couldInsert(best.total)) {
+        const pieceIds = chosen.map((p) => p.id);
+        if (seededKeys.size > 0 && seededKeys.has(pieceIds.join("|"))) return;
         heap.insert({
-          pieceIds: chosen.map((p) => p.id),
+          pieceIds,
           baseStats: sum.map((v) => Math.min(STAT_CAP, v)),
           stats: best.stats,
           tuningBonus: best.tuningBonus,
@@ -502,15 +519,21 @@ export function solve(
   // Ceilings fill the remaining progress share by wall-clock share of their budget —
   // their true cost isn't predictable, but time elapsed is monotonic and bounded.
   const ceilingStart = performance.now();
-  const ceilings = runCeilings(input, slots, seed, ceilingBudgetMs, onCeilings, () =>
-    onProgress?.(
-      TOPN_PROGRESS_SHARE +
-        (1 - TOPN_PROGRESS_SHARE) *
-          Math.min(1, (performance.now() - ceilingStart) / ceilingBudgetMs),
-    ),
+  const { ceilings, exact: ceilingsExact } = runCeilings(
+    input,
+    slots,
+    seed,
+    ceilingBudgetMs,
+    onCeilings,
+    () =>
+      onProgress?.(
+        TOPN_PROGRESS_SHARE +
+          (1 - TOPN_PROGRESS_SHARE) *
+            Math.min(1, (performance.now() - ceilingStart) / ceilingBudgetMs),
+      ),
   );
   onProgress?.(1);
-  return { loadouts, combosTried, combosValid, ceilings, capped };
+  return { loadouts, combosTried, combosValid, ceilings, ceilingsExact, capped };
 }
 
 /**
@@ -527,10 +550,10 @@ export function solveCeilings(
   budgetMs: number,
   onCeilings?: (ceilings: number[]) => void,
   onProbe?: () => void,
-): number[] {
+): { ceilings: number[]; exact: boolean } {
   const slots = buildSlots(input);
   if (slots.length !== NUM_SLOTS || slots.some((s) => s.length === 0)) {
-    return seed.slice(0, NUM_STATS);
+    return { ceilings: seed.slice(0, NUM_STATS), exact: false };
   }
   return runCeilings(input, slots, seed, budgetMs, onCeilings, onProbe);
 }
@@ -541,9 +564,10 @@ export function solveCeilings(
  * the current minimums on the OTHER five stats. Each stat's ceiling is pinned by binary-
  * searching feasibility probes between `seed` (achievable, from the top-N's builds) and
  * the optimistic suffix bound; probes for the six stats are interleaved round-robin under
- * the shared budget (see the scheduling comment below). Exact when the probes fit the
- * budget, otherwise a guaranteed-achievable lower bound. An infeasible query (no build
- * meets the minimums) yields zeros.
+ * the shared budget (see the scheduling comment below). `exact` reports whether every
+ * ceiling was PROVEN (all binary searches converged with no probe timing out); when
+ * false the ceilings are guaranteed-achievable lower bounds. An infeasible query (no
+ * build meets the minimums) yields zeros.
  */
 function runCeilings(
   input: OptimizerInput,
@@ -552,26 +576,22 @@ function runCeilings(
   budgetMs: number,
   onProgress?: (ceilings: number[]) => void,
   onProbe?: () => void,
-): number[] {
+): { ceilings: number[]; exact: boolean } {
   const min = input.minimums;
   const mods: ModBudget = input.mods ?? { major: 0, minor: 0 };
   const maxModPoints = mods.major * 10 + mods.minor * 5;
   const frag = input.fragmentBonus ?? new Array(NUM_STATS).fill(0);
   const reqs: SetRequirement[] = input.setRequirements ?? [];
   const exoticMode = input.exotic?.mode ?? "any";
-  const exoticHashes = input.exotic?.hashes;
   const needExotic = exoticMode === "require" || exoticMode === "specific";
-  const isChosenExotic = (p: InternalPiece): boolean =>
-    p.exotic &&
-    (exoticMode === "specific"
-      ? p.hash !== undefined && !!exoticHashes?.includes(p.hash)
-      : true);
 
+  // buildSlots pre-filtered constraint-ineligible exotics (see solve()) — reachability
+  // is just p.exotic.
   const { suffixStat, setSuffix, exoticSuffix, artSuffix } = computeSuffixBounds(
     slots,
     reqs,
     needExotic,
-    isChosenExotic,
+    (p) => p.exotic,
   );
 
   const ceiling = seed.slice(0, NUM_STATS);
@@ -618,11 +638,22 @@ function runCeilings(
   let aborted = false;
   let nodes = 0;
   let found = false;
+  // Long probes must still stream progress ticks — probe-completion granularity alone
+  // can sit silent for a probe's whole fair share (seconds on hard pools).
+  let lastTickAt = 0;
+  const TICK_INTERVAL_MS = 250;
   const search = (k: number, exoticCount: number): void => {
     if (aborted) return;
-    if ((nodes++ & 2047) === 0 && performance.now() > probeDeadline) {
-      aborted = true;
-      return;
+    if ((nodes++ & 2047) === 0) {
+      const now = performance.now();
+      if (now > probeDeadline) {
+        aborted = true;
+        return;
+      }
+      if (onProbe && now - lastTickAt >= TICK_INTERVAL_MS) {
+        lastTickAt = now;
+        onProbe();
+      }
     }
     if (k === NUM_SLOTS) {
       if (needExotic && exoticCount !== 1) return;
@@ -674,11 +705,15 @@ function runCeilings(
   // and each probe is capped at a fair share of the remaining budget. A probe that finds
   // a build raises that stat's ceiling (trusted even if the clock then expired — a found
   // build is proof); a probe that proves infeasibility OR times out shrinks the optimistic
-  // bound instead, so the ceiling stays a guaranteed-achievable lower bound. Fair shares
-  // are what keep one expensive impossibility proof from starving every stat scheduled
-  // after it (previously sequential refinement reported those stats' raw seeds as maxima).
+  // bound instead, so the ceiling stays a guaranteed-achievable lower bound. A timed-out
+  // shrink is NOT a proof though, so it (like running out of budget with stats
+  // unsettled) makes the result inexact — callers must never present inexact ceilings
+  // as proven maxima. Fair shares are what keep one expensive impossibility proof from
+  // starving every stat scheduled after it (previously sequential refinement reported
+  // those stats' raw seeds as maxima).
   const globalDeadline = performance.now() + budgetMs;
   const optimistic = new Array(NUM_STATS).fill(0);
+  let exact = true;
   let pending: number[] = [];
   for (let t = 0; t < NUM_STATS; t++) {
     optimistic[t] = clamp(frag[t] + suffixStat[0][t] + maxModPoints + artSuffix[0] * 3);
@@ -701,11 +736,15 @@ function runCeilings(
         onProgress?.(ceiling.slice(0, NUM_STATS)); // stream each improvement for animation
       } else {
         optimistic[t] = mid - 1;
+        if (aborted) exact = false; // timed out, not disproven — unproven shrink
       }
       if (ceiling[t] < optimistic[t]) next.push(t);
     }
     if (performance.now() >= globalDeadline) break; // budget spent — keep proven values
     pending = next;
   }
-  return ceiling;
+  for (let t = 0; t < NUM_STATS; t++) {
+    if (ceiling[t] < optimistic[t]) exact = false; // ran out of budget unsettled
+  }
+  return { ceilings: ceiling, exact };
 }

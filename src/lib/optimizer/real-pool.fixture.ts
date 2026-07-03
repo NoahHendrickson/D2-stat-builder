@@ -5,6 +5,8 @@
  * targets and a CODA 4pc requirement, the health ceiling probe alone exceeds the whole
  * refinement budget on a pool this size, which starved every stat scheduled after it.
  */
+import type { OptimizerPiece } from "./types";
+
 export interface FixturePiece {
   slot: "helmet" | "arms" | "chest" | "legs" | "classItem";
   exo: 0 | 1;
@@ -16,6 +18,19 @@ export interface FixturePiece {
   tuned: number;
   /** Off-archetype stat indices (Balanced Tuning targets). */
   off: number[];
+}
+
+/** The pool mapped to the optimizer's 5-slot input shape — the ONE translation every test uses. */
+export function realWarlockSlots(): OptimizerPiece[][] {
+  return (["helmet", "arms", "chest", "legs", "classItem"] as const).map((slot) =>
+    REAL_WARLOCK_POOL.filter((p) => p.slot === slot).map((p, i) => ({
+      id: `${slot}${i}`,
+      stats: p.stats,
+      exotic: p.exo === 1,
+      setHash: p.set || undefined,
+      tuning: { tuned: p.tuned, offStats: p.off },
+    })),
+  );
 }
 
 export const REAL_WARLOCK_POOL: FixturePiece[] = [

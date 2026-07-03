@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { solve } from "./solve";
 import type { OptimizerInput, OptimizerPiece } from "./types";
-import { REAL_WARLOCK_POOL } from "./real-pool.fixture";
+import { realWarlockSlots } from "./real-pool.fixture";
 
 /** A tuning-free, set-free piece — stats sum straight into the loadout total. */
 function piece(id: string, stats: number[]): OptimizerPiece {
@@ -192,6 +192,35 @@ describe("ceiling refinement", () => {
     expect(out.ceilings).toEqual([70, 10, 10, 10, 10, 10]);
   });
 
+  test("ceilingsExact: proven on easy pools, false when refinement runs out of budget", () => {
+    // Single-loadout pool: optimistic bounds equal the seeds, nothing to probe — exact.
+    const easy = solve(
+      input([
+        [piece("h", [30, 0, 0, 0, 0, 0])],
+        [piece("a", [0, 20, 0, 0, 0, 0])],
+        [piece("c", [0, 0, 10, 0, 0, 0])],
+        [piece("l", [0, 0, 0, 40, 0, 0])],
+        [piece("ci", [0, 0, 0, 0, 15, 0])],
+      ]),
+    );
+    expect(easy.ceilingsExact).toBe(true);
+
+    // Real pool with tight targets and a ~1ms refinement budget: probes can't settle,
+    // so the ceilings are lower bounds and MUST NOT be flagged proven.
+    const hard = solve(
+      {
+        slots: realWarlockSlots(),
+        minimums: [190, 0, 0, 120, 0, 0],
+        mods: { major: 3, minor: 2 },
+        setRequirements: [{ setHash: 1490136267, count: 4 }],
+        allowTuning: true,
+        fragmentBonus: [0, 0, 10, -20, 0, 0],
+      },
+      { topNBudgetMs: 500, ceilingBudgetMs: 1 },
+    );
+    expect(hard.ceilingsExact).toBe(false);
+  });
+
   test("ceilingSeed floors the seeds (trusted as proven-achievable)", () => {
     const slots = [
       [piece("h", [30, 0, 0, 0, 0, 0])],
@@ -215,18 +244,9 @@ describe("ceiling refinement", () => {
     // Weapon-180 + grenade-135 builds exist in this pool, but the health ceiling probe
     // alone blows the whole refinement budget; sequential refinement aborted everything
     // after it and reported grenade's seed (110 — the user's own target) as its max.
-    const slots = ["helmet", "arms", "chest", "legs", "classItem"].map((slot) =>
-      REAL_WARLOCK_POOL.filter((p) => p.slot === slot).map((p, i) => ({
-        id: `${slot}${i}`,
-        stats: p.stats,
-        exotic: p.exo === 1,
-        setHash: p.set || undefined,
-        tuning: { tuned: p.tuned, offStats: p.off },
-      })),
-    );
     const out = solve(
       {
-        slots,
+        slots: realWarlockSlots(),
         minimums: [180, 0, 0, 110, 0, 0],
         mods: { major: 3, minor: 2 },
         setRequirements: [{ setHash: 1490136267, count: 4 }],

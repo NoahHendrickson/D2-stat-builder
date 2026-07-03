@@ -116,13 +116,19 @@ export function useOptimizer() {
                 const rose = msg.output.ceilings.some(
                   (v, s) => v > ref.interim.ceilings[s],
                 );
-                // "confirmed" is a proven claim — only when the background build
-                // search ran to exhaustion. An unverified quiet pass resolves to a
-                // null outcome (the time-limit messaging stays).
+                // "confirmed" is a proven claim about BOTH halves: the build walk ran
+                // to exhaustion (msg.verified) AND the ceilings are proven exact
+                // (output.ceilingsExact). Anything less resolves to a null outcome so
+                // the UI never overclaims.
                 setRefinement({
                   phase: "done",
-                  outcome: rose ? "improved" : msg.verified ? "confirmed" : null,
+                  outcome: rose
+                    ? "improved"
+                    : msg.verified && msg.output.ceilingsExact
+                      ? "confirmed"
+                      : null,
                   pending: ref.pending,
+                  verified: msg.verified,
                 });
               }
             }

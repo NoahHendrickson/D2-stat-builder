@@ -1,8 +1,8 @@
 import { expect, test } from "vitest";
-import { runSolveSession } from "./session";
+import { beats, runSolveSession } from "./session";
 import { solve } from "./solve";
 import type { OptimizerInput, OptimizerOutput, OptimizerPiece } from "./types";
-import { REAL_WARLOCK_POOL } from "./real-pool.fixture";
+import { realWarlockSlots } from "./real-pool.fixture";
 
 type SessionEvent =
   | { type: "progress"; value: number }
@@ -67,15 +67,7 @@ test("an uncapped search posts exactly one final, verified result", () => {
 // walk's (486). That is exactly the hidden better-TOTAL blind spot the pending offer
 // exists to cover: the better build moves no per-stat ceiling, only the sum.
 const realInput = (): OptimizerInput => ({
-  slots: ["helmet", "arms", "chest", "legs", "classItem"].map((slot) =>
-    REAL_WARLOCK_POOL.filter((p) => p.slot === slot).map((p, i) => ({
-      id: `${slot}${i}`,
-      stats: p.stats,
-      exotic: p.exo === 1,
-      setHash: p.set || undefined,
-      tuning: { tuned: p.tuned, offStats: p.off },
-    })),
-  ),
+  slots: realWarlockSlots(),
   minimums: [190, 0, 0, 120, 0, 0],
   mods: { major: 3, minor: 2 },
   setRequirements: [{ setHash: 1490136267, count: 4 }],
@@ -105,6 +97,9 @@ test("a capped search freezes its list, refines ceilings, and offers a better li
   // (and stays flagged capped — it is still a best-effort list for these targets).
   expect(final.output.loadouts).toEqual(interim.output.loadouts);
   expect(final.output.capped).toBe(true);
+  // With a 30s budget the refinement settles every stat — the final post must carry
+  // the proven-exact flag (the "Verified" claim in the UI hangs off it).
+  expect(final.output.ceilingsExact).toBe(true);
 
   // Ceilings only ever rise across the refinement…
   for (let s = 0; s < 6; s++) {
@@ -130,16 +125,16 @@ test("a capped search freezes its list, refines ceilings, and offers a better li
       interim.output.loadouts[i].total,
     );
   }
-  const strictlyBetter =
-    offered.loadouts.length > interim.output.loadouts.length ||
-    offered.loadouts.some(
-      (lo, i) => lo.total > (interim.output.loadouts[i]?.total ?? -1),
-    );
-  expect(strictlyBetter).toBe(true);
-  // The offered list matches what the reference exhaustive solve finds.
+  expect(beats(offered, interim.output)).toBe(true);
+  // The offered list matches what the reference exhaustive solve finds — this now
+  // also pins the heapSeed path (pass 2 seeds its heap from the frozen list) against
+  // an unseeded reference…
   expect(offered.loadouts.map((l) => l.total)).toEqual(
     reference.loadouts.map((l) => l.total),
   );
+  // …and heap seeding must never produce duplicate builds in the offered list.
+  const keys = offered.loadouts.map((l) => l.pieceIds.join("|"));
+  expect(new Set(keys).size).toBe(keys.length);
 
   // Background progress is monotone (never restarts across the two phases): every
   // progress event after the interim result post only ever rises.
@@ -174,11 +169,6 @@ test("an unverified background pass never claims exhaustion", () => {
   // A pending offer is allowed only if strictly better; either way the frozen list
   // stands and nothing claims exhaustion.
   for (const { output: offered } of better()) {
-    const strictlyBetter =
-      offered.loadouts.length > interim.output.loadouts.length ||
-      offered.loadouts.some(
-        (lo, i) => lo.total > (interim.output.loadouts[i]?.total ?? -1),
-      );
-    expect(strictlyBetter).toBe(true);
+    expect(beats(offered, interim.output)).toBe(true);
   }
 }, 60_000);

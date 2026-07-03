@@ -109,6 +109,12 @@ export interface OptimizerOutput {
    * guaranteed-achievable lower bound. All zero when there are no pieces.
    */
   ceilings: StatArray;
+  /**
+   * True when every ceiling was PROVEN exact (all refinement probes converged in
+   * budget). False means the ceilings are guaranteed-achievable lower bounds — real,
+   * but possibly understated — and must never be presented as proven maxima.
+   */
+  ceilingsExact: boolean;
   /** True if the top-N search hit its time budget and returned best-effort results. */
   capped: boolean;
 }
@@ -116,8 +122,9 @@ export interface OptimizerOutput {
 /**
  * How a background refinement resolved: "improved" = it proved higher per-stat maxima
  * than the capped search reported (the slider overlays rose — raise a target to
- * explore); "confirmed" = the background build search ran to exhaustion and found no
- * higher maxima (a proven "nothing better exists").
+ * explore); "confirmed" = a fully proven "nothing better exists" — the build walk ran
+ * to exhaustion AND the ceilings are proven exact (`ceilingsExact`). Anything less
+ * proven resolves to a null outcome instead.
  */
 export type RefineOutcome = "improved" | "confirmed";
 
@@ -127,8 +134,10 @@ export type RefineOutcome = "improved" | "confirmed";
  * stat ceilings rising and, when the background search strictly beats the frozen
  * list, as a `pending` replacement that is applied only on explicit user action.
  * `pending` exists on "running" because the "better" message arrives just before the
- * final result. A "done" outcome of null means the background pass itself timed out
- * unverified (the time-limit messaging stays).
+ * final result. On "done", `verified` means the background build search ran to
+ * exhaustion (the frozen list is proven complete); an outcome of null with
+ * `verified: false` means the background pass itself timed out (the time-limit
+ * messaging stays).
  */
 export type RefinementState =
   | { phase: "idle" }
@@ -138,7 +147,12 @@ export type RefinementState =
       interim: OptimizerOutput;
       pending: OptimizerOutput | null;
     }
-  | { phase: "done"; outcome: RefineOutcome | null; pending: OptimizerOutput | null };
+  | {
+      phase: "done";
+      outcome: RefineOutcome | null;
+      pending: OptimizerOutput | null;
+      verified: boolean;
+    };
 
 /** Main thread → worker: a search request tagged with a monotonically increasing seq. */
 export interface OptimizerRequest {

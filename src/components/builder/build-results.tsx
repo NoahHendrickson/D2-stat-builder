@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, memo, useState, type ReactNode } from "react";
 import Image from "next/image";
 import {
   ArrowSquareOut,
@@ -181,8 +181,13 @@ interface BuildActionProps {
   onEquipped?: () => void;
 }
 
-/** A single build: a collapsed stat header that expands to a per-piece breakdown. */
-function BuildRow({
+/**
+ * A single build: a collapsed stat header that expands to a per-piece breakdown.
+ * Memoized: background-refinement progress ticks re-render the results column ~10×/s
+ * while the list itself is frozen — every prop here is identity-stable across those
+ * ticks, so rows bail out and only the status line pays for the tick.
+ */
+const BuildRow = memo(function BuildRow({
   loadout,
   pieceMap,
   setMap,
@@ -406,7 +411,7 @@ function BuildRow({
       )}
     </div>
   );
-}
+});
 
 /**
  * Footer of an expanded build: copy the piece IDs as a DIM search, hand the
@@ -598,12 +603,12 @@ function SearchStatus({
       return (
         <p className="text-foreground/85 flex items-center gap-1.5 text-xs" aria-live="polite">
           <CircleNotch className="animate-spin" aria-hidden />
-          Builds locked in — searching for higher maximums and stronger builds (
+          First pass done — searching deeper for higher maximums and stronger builds (
           {Math.round(refinement.progress * 100)}%)
         </p>
       );
     case "done": {
-      const { outcome, pending } = refinement;
+      const { outcome, pending, verified } = refinement;
       const lines: ReactNode[] = [];
       if (pending) {
         lines.push(
@@ -634,13 +639,28 @@ function SearchStatus({
           </p>,
         );
       } else if (outcome === "confirmed" && !pending) {
+        // Only rendered when both halves are PROVEN (walk exhausted + ceilings exact).
         lines.push(
           <p key="confirmed" className="text-muted-foreground text-xs" aria-live="polite">
             Verified — no better builds or higher maximums exist for these targets.
           </p>,
         );
+      } else if (outcome === null && verified && !pending) {
+        // Build walk proven exhaustive, but some ceiling probes ran out of budget —
+        // claim only what was proven.
+        lines.push(
+          <p key="verified-list" className="text-muted-foreground text-xs" aria-live="polite">
+            Search complete — no better builds exist for these targets (stat maximums
+            shown are best-effort).
+          </p>,
+        );
       }
-      return lines.length > 0 ? <>{lines}</> : cappedBanner;
+      // An unverified list stays flagged: the time-limit warning is never suppressed
+      // by an improved-maximums note or a pending offer.
+      if (!verified && cappedBanner) {
+        lines.push(<Fragment key="capped">{cappedBanner}</Fragment>);
+      }
+      return lines.length > 0 ? <>{lines}</> : null;
     }
     default: {
       const _exhaustive: never = refinement;
@@ -682,13 +702,18 @@ export function BuildResults({
     />
   );
   if (result.loadouts.length === 0) {
+    // The definitive "nothing meets those constraints" is only honest once no deeper
+    // search is running and no better list is waiting behind the CTA above.
+    const emptyCopy =
+      refinement.phase === "running"
+        ? "No builds found in the first pass yet — the deeper search is still running."
+        : refinement.phase === "done" && refinement.pending
+          ? "The first pass found none — use “Show them” above to load what the full search found."
+          : "No loadouts from your gear meet those constraints — even with mods. Try easing a target, a set bonus, or raising your mod budget.";
     return (
       <div className="space-y-3">
         {status}
-        <p className="text-muted-foreground text-sm">
-          No loadouts from your gear meet those constraints — even with mods. Try
-          easing a target, a set bonus, or raising your mod budget.
-        </p>
+        <p className="text-muted-foreground text-sm">{emptyCopy}</p>
       </div>
     );
   }

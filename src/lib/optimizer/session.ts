@@ -46,8 +46,9 @@ export interface SessionBudgets {
  * Did `next` rank-wise beat `prev`? Both passes walk the same deterministic order, so
  * a longer-budget pass can only match or extend a shorter one — but this is verified,
  * not assumed: a pending update is only offered when strictly better somewhere.
+ * (Exported so tests assert offers against the same definition of "better".)
  */
-function beats(next: OptimizerOutput, prev: OptimizerOutput): boolean {
+export function beats(next: OptimizerOutput, prev: OptimizerOutput): boolean {
   if (next.loadouts.length > prev.loadouts.length) return true;
   return next.loadouts.some(
     (lo, i) => lo.total > (prev.loadouts[i]?.total ?? -1),
@@ -86,7 +87,7 @@ export function runSolveSession(
   // Phase 1: exact ceilings (overlays rise live; time-based progress share).
   const ceilingBudgetMs = budgets.refineCeilingBudgetMs ?? REFINE_CEILING_BUDGET_MS;
   const ceilingStart = performance.now();
-  const ceilings = solveCeilings(
+  const phase1 = solveCeilings(
     input,
     first.ceilings,
     ceilingBudgetMs,
@@ -97,16 +98,31 @@ export function runSolveSession(
           Math.min(1, (performance.now() - ceilingStart) / ceilingBudgetMs),
       ),
   );
+  // Phase boundary: solveCeilings may run zero probes (everything already settled) and
+  // emit nothing — pin the bar at the boundary so it never sits at 0% for the phase.
+  cb.onProgress(CEILING_PROGRESS_SHARE);
 
   // Phase 2: exhaustive build search. Its ceilings are instant (budget 0, seeded from
-  // phase 1) so the whole budget goes to the walk.
+  // phase 1) and its heap is seeded with the frozen list, so the deterministic walk's
+  // already-covered prefix is pruned by the admission bound instead of re-evaluated —
+  // the whole budget goes to new combos.
   const second = solve(input, {
     topNBudgetMs: budgets.refineTopNBudgetMs ?? REFINE_TOPN_BUDGET_MS,
     ceilingBudgetMs: 0,
-    ceilingSeed: ceilings,
+    ceilingSeed: phase1.ceilings,
+    heapSeed: first.loadouts,
     onProgress: (p) =>
       cb.onProgress(CEILING_PROGRESS_SHARE + (1 - CEILING_PROGRESS_SHARE) * p),
   });
   if (beats(second, first)) cb.onBetter(second);
-  cb.onResult({ ...first, ceilings }, false, !second.capped);
+  // The final post keeps the FROZEN loadouts but takes the best proven ceilings from
+  // both phases: phase 2's deeper walk can prove per-stat maxima (its top-200 seeds)
+  // that phase 1's probes timed out short of. The merge preserves exactness: when
+  // phase 1 is exact, phase 2's achievable values can't exceed it.
+  const ceilings = phase1.ceilings.map((v, s) => Math.max(v, second.ceilings[s]));
+  cb.onResult(
+    { ...first, ceilings, ceilingsExact: phase1.exact },
+    false,
+    !second.capped,
+  );
 }
