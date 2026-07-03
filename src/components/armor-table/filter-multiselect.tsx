@@ -7,7 +7,8 @@ import {
   field3dFocusVisibleClasses,
   field3dInteractiveClasses,
   field3dSurfaceClasses,
-  fieldControlHeightClasses,
+  fieldControlShellClasses,
+  fieldControlTriggerResetClasses,
 } from "@/lib/field-surface";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -50,8 +51,9 @@ export const filterMultiselectActiveBadgeClasses =
   "h-4 shrink-0 border-transparent bg-brand px-1 text-[10px] text-white tabular-nums";
 
 export const filterMultiselectTriggerClasses = cn(
-  "flex items-center justify-between gap-1.5 rounded-[6px] border border-transparent bg-clip-padding pr-2 pl-2.5 text-sm whitespace-nowrap outline-none select-none",
-  fieldControlHeightClasses,
+  "items-center justify-between gap-1.5 pr-2 pl-2.5 text-sm whitespace-nowrap outline-none select-none",
+  fieldControlShellClasses,
+  fieldControlTriggerResetClasses,
   field3dSurfaceClasses,
   field3dInteractiveClasses,
   field3dFocusVisibleClasses,
