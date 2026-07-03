@@ -166,7 +166,9 @@ export function BuilderPanel({
   const manifest =
     manifestStatus.state === "ready" ? manifestStatus.manifest : undefined;
 
-  const [classType, setClassType] = useState<number | null>(null);
+  const [classType, setClassType] = useState<number | null>(
+    () => loadSelections()?.classType ?? null,
+  );
   const [targets, setTargets] = useState<number[]>(() => [0, 0, 0, 0, 0, 0]);
   const [major, setMajor] = useState(0);
   const [setReqs, setSetReqs] = useState<Record<number, 2 | 4>>({});
