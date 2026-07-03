@@ -21,6 +21,7 @@ import {
   type StatIconMap,
 } from "@/lib/armory/stats";
 import type { StatModHashes } from "@/lib/dim/mod-hashes";
+import type { RefineOutcome } from "@/lib/optimizer/use-optimizer";
 import {
   buildDimLoadout,
   buildDimLoadoutUrl,
@@ -566,8 +567,63 @@ function BuildActions({
   );
 }
 
+/**
+ * Search-exactness status above the results. Three states: an active background
+ * refinement (the responsive pass was time-capped — best-so-far is shown while the
+ * exhaustive pass runs, with live progress so it's unmissable that better may come),
+ * a resolved refinement (better builds landed, or the interim answer was confirmed
+ * optimal), or the gave-up amber banner (even the background pass hit its time cap).
+ */
+function SearchStatus({
+  capped,
+  refining,
+  refineProgress,
+  refineOutcome,
+}: {
+  capped: boolean;
+  refining: boolean;
+  refineProgress: number;
+  refineOutcome: RefineOutcome;
+}) {
+  if (refining) {
+    return (
+      <p className="text-foreground/85 flex items-center gap-1.5 text-xs" aria-live="polite">
+        <CircleNotch className="animate-spin" aria-hidden />
+        Best found so far — still searching for better builds (
+        {Math.round(refineProgress * 100)}%)
+      </p>
+    );
+  }
+  if (capped) {
+    return (
+      <p className="text-xs text-amber-600/90 dark:text-amber-500/90">
+        Hit the time limit — showing the best found so far. Narrow your targets
+        for an exhaustive search.
+      </p>
+    );
+  }
+  if (refineOutcome === "improved") {
+    return (
+      <p className="text-xs text-emerald-600/90 dark:text-emerald-500/90" aria-live="polite">
+        Search complete — found better builds than the first results.
+      </p>
+    );
+  }
+  if (refineOutcome === "confirmed") {
+    return (
+      <p className="text-muted-foreground text-xs" aria-live="polite">
+        Search complete — nothing better exists for these targets.
+      </p>
+    );
+  }
+  return null;
+}
+
 export function BuildResults({
   result,
+  refining,
+  refineProgress,
+  refineOutcome,
   pieceMap,
   targets,
   setMap,
@@ -581,29 +637,38 @@ export function BuildResults({
   onEquipped,
 }: {
   result: OptimizerOutput;
+  refining: boolean;
+  refineProgress: number;
+  refineOutcome: RefineOutcome;
   pieceMap: Map<string, ArmorPiece>;
   targets: number[];
   setMap: Map<number, ArmorSetInfo>;
   statIcons: StatIconMap;
   balancedTuningIcon?: string;
 } & BuildActionProps) {
+  const status = (
+    <SearchStatus
+      capped={result.capped}
+      refining={refining}
+      refineProgress={refineProgress}
+      refineOutcome={refineOutcome}
+    />
+  );
   if (result.loadouts.length === 0) {
     return (
-      <p className="text-muted-foreground text-sm">
-        No loadouts from your gear meet those constraints — even with mods. Try
-        easing a target, a set bonus, or raising your mod budget.
-      </p>
+      <div className="space-y-3">
+        {status}
+        <p className="text-muted-foreground text-sm">
+          No loadouts from your gear meet those constraints — even with mods. Try
+          easing a target, a set bonus, or raising your mod budget.
+        </p>
+      </div>
     );
   }
 
   return (
     <div className="space-y-3">
-      {result.capped && (
-        <p className="text-xs text-amber-600/90 dark:text-amber-500/90">
-          Hit the time limit — showing the best found so far. Narrow your targets
-          for an exhaustive search.
-        </p>
-      )}
+      {status}
       <div className="space-y-1.5">
         {result.loadouts.slice(0, MAX_SHOWN).map((loadout, idx) => (
           <BuildRow

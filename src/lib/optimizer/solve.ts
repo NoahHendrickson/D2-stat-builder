@@ -263,6 +263,14 @@ export interface SolveOptions {
    * compare pruned vs unpruned runs and measure the reduction.
    */
   dominancePruning?: boolean;
+  /**
+   * Per-stat floor for the ceiling seeds. MUST be proven-achievable for this exact
+   * input (e.g. a prior pass's refined ceilings for the SAME query) — the refinement
+   * only ever raises the seed, so an unachievable value would be reported back as a
+   * ceiling. Lets a re-run skip re-proving what an earlier pass already established
+   * and keeps its streamed ceilings from regressing below what the UI showed.
+   */
+  ceilingSeed?: number[];
 }
 
 export function solve(
@@ -291,10 +299,22 @@ export function solve(
       ? p.hash !== undefined && !!exoticHashes?.includes(p.hash)
       : true);
 
+  // Pieces the exotic constraint excludes can never appear in a valid loadout, but
+  // leaving them in the pool inflates every suffix bound (looser bounds → less pruning)
+  // and slot sizes — drop them before dedupe so the search never sees them.
+  const eligible = (p: OptimizerPiece): boolean =>
+    !p.exotic ||
+    (exoticMode === "none"
+      ? false
+      : exoticMode !== "specific" ||
+        (p.hash !== undefined && !!exoticHashes?.includes(p.hash)));
   const slots = input.slots.map((s) =>
-    dedupe(s, reqs.length > 0, allowTuning, opts.dominancePruning ?? true).sort(
-      (a, b) => b.total - a.total,
-    ),
+    dedupe(
+      s.filter(eligible),
+      reqs.length > 0,
+      allowTuning,
+      opts.dominancePruning ?? true,
+    ).sort((a, b) => b.total - a.total),
   );
   if (slots.length !== NUM_SLOTS || slots.some((s) => s.length === 0)) {
     return {
@@ -431,8 +451,7 @@ export function solve(
         idx1 = i;
         emitTopNProgress();
       }
-      if (exoticMode === "none" && p.exotic) continue;
-      if (exoticMode === "specific" && p.exotic && !isChosenExotic(p)) continue;
+      // Exotic-ineligible pieces were pre-filtered from the pool; only the ≤1 rule remains.
       const nextExotic = exoticCount + (p.exotic ? 1 : 0);
       if (nextExotic > 1) continue; // ≤1 exotic per loadout
       for (let s = 0; s < NUM_STATS; s++) {
@@ -474,6 +493,11 @@ export function solve(
     for (let s = 0; s < NUM_STATS; s++) {
       const v = clamp(lo.stats[s] + spare);
       if (v > seed[s]) seed[s] = v;
+    }
+  }
+  if (opts.ceilingSeed) {
+    for (let s = 0; s < NUM_STATS; s++) {
+      if (opts.ceilingSeed[s] > seed[s]) seed[s] = opts.ceilingSeed[s];
     }
   }
   // Emit the seed immediately as the fast approximate — the animation's first frame —
@@ -596,8 +620,7 @@ function runCeilings(
     if (needExotic && exoticCount + exoticSuffix[k] < 1) return;
     for (const p of slots[k]) {
       if (found || aborted) return;
-      if (exoticMode === "none" && p.exotic) continue;
-      if (exoticMode === "specific" && p.exotic && !isChosenExotic(p)) continue;
+      // Exotic-ineligible pieces were pre-filtered from the pool (solve() built `slots`).
       const nextExotic = exoticCount + (p.exotic ? 1 : 0);
       if (nextExotic > 1) continue;
       for (let s = 0; s < NUM_STATS; s++) {

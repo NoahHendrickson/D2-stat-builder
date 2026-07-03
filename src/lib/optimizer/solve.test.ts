@@ -192,6 +192,23 @@ describe("ceiling refinement", () => {
     expect(out.ceilings).toEqual([70, 10, 10, 10, 10, 10]);
   });
 
+  test("ceilingSeed floors the seeds (trusted as proven-achievable)", () => {
+    const slots = [
+      [piece("h", [30, 0, 0, 0, 0, 0])],
+      [piece("a", [0, 20, 0, 0, 0, 0])],
+      [piece("c", [0, 0, 10, 0, 0, 0])],
+      [piece("l", [0, 0, 0, 40, 0, 0])],
+      [piece("ci", [0, 0, 0, 0, 15, 0])],
+    ];
+    // Budget 0 → ceilings ARE the seeds. The seed takes max(loadout-derived, ceilingSeed)
+    // per stat: weapons is lifted to the trusted 33, health keeps its own better 20.
+    const out = solve(input(slots), {
+      ceilingBudgetMs: 0,
+      ceilingSeed: [33, 5, 0, 0, 0, 0],
+    });
+    expect(out.ceilings).toEqual([33, 20, 10, 40, 15, 0]);
+  });
+
   test("a slow stat's refinement can't starve the stats after it (real-pool regression)", () => {
     // Noah's real Warlock pool with his exact selections (weapon ≥ 180, grenade ≥ 110,
     // CODA 4pc, 3 major + 2 minor mods, Solar fragments = class +10 / grenade −20).
@@ -527,6 +544,53 @@ describe("dominance pruning", () => {
     const unpruned = solve(input(slots), { dominancePruning: false });
     expect(pruned.loadouts[0].total).toBe(unpruned.loadouts[0].total);
     expect(pruned.ceilings).toEqual(unpruned.ceilings);
+  });
+});
+
+describe("exotic pre-filter", () => {
+  const exo = (id: string, hash: number, stats: number[]): OptimizerPiece => ({
+    id,
+    stats,
+    exotic: true,
+    hash,
+  });
+  const mixedSlots = (): OptimizerPiece[][] => [
+    [piece("h1", [30, 0, 0, 0, 0, 0]), exo("xh", 1, [40, 0, 0, 0, 0, 0])],
+    [piece("a1", [0, 20, 0, 0, 0, 0]), exo("xa", 2, [0, 30, 0, 0, 0, 0])],
+    [piece("c1", [0, 0, 10, 0, 0, 0])],
+    [piece("l1", [0, 0, 0, 40, 0, 0])],
+    [piece("k1", [0, 0, 0, 0, 15, 0])],
+  ];
+  const strip = (
+    slots: OptimizerPiece[][],
+    keep: (p: OptimizerPiece) => boolean,
+  ): OptimizerPiece[][] => slots.map((s) => s.filter(keep));
+
+  test("mode none behaves exactly like a pool with no exotics", () => {
+    const filtered = solve(input(mixedSlots(), { exotic: { mode: "none" } }));
+    const stripped = solve(input(strip(mixedSlots(), (p) => !p.exotic)));
+    expect(filtered.loadouts.map((l) => l.total)).toEqual(
+      stripped.loadouts.map((l) => l.total),
+    );
+    expect(filtered.ceilings).toEqual(stripped.ceilings);
+    // Identical pool after the pre-filter → identical walk, not merely equal results.
+    expect(filtered.combosTried).toBe(stripped.combosTried);
+  });
+
+  test("mode specific behaves exactly like a pool holding only the chosen exotic", () => {
+    const cfg = { exotic: { mode: "specific" as const, hashes: [1] } };
+    const filtered = solve(input(mixedSlots(), cfg));
+    const stripped = solve(
+      input(strip(mixedSlots(), (p) => !p.exotic || p.hash === 1), cfg),
+    );
+    expect(filtered.loadouts.map((l) => l.total)).toEqual(
+      stripped.loadouts.map((l) => l.total),
+    );
+    expect(filtered.ceilings).toEqual(stripped.ceilings);
+    expect(filtered.combosTried).toBe(stripped.combosTried);
+    // The chosen exotic is still found and used.
+    expect(filtered.loadouts.length).toBeGreaterThan(0);
+    expect(filtered.loadouts[0].pieceIds[0]).toBe("xh");
   });
 });
 

@@ -12,6 +12,7 @@ import type { ArmoryCharacter } from "@/lib/armory/fetch";
 import type { StatIconMap } from "@/lib/armory/stats";
 import type { StatModHashes } from "@/lib/dim/mod-hashes";
 import type { OptimizerOutput } from "@/lib/optimizer/types";
+import type { RefineOutcome } from "@/lib/optimizer/use-optimizer";
 
 const LOADING_ROWS = 5;
 
@@ -72,6 +73,12 @@ export interface BuildsColumnContentProps {
   running: boolean;
   result: OptimizerOutput | null;
   displayedProgress: number;
+  /** A capped search is still refining in the background (interim results shown). */
+  refining: boolean;
+  /** 0–1 progress of the background refinement pass. */
+  refineProgress: number;
+  /** How the last background refinement resolved (null = none ran / still running). */
+  refineOutcome: RefineOutcome;
   onCancel: () => void;
   pieceMap: Map<string, ArmorPiece>;
   targets: number[];
@@ -92,6 +99,9 @@ export function BuildsColumnContent({
   running,
   result,
   displayedProgress,
+  refining,
+  refineProgress,
+  refineOutcome,
   onCancel,
   pieceMap,
   targets,
@@ -138,6 +148,9 @@ export function BuildsColumnContent({
       ) : result ? (
         <BuildResults
           result={result}
+          refining={refining}
+          refineProgress={refineProgress}
+          refineOutcome={refineOutcome}
           pieceMap={pieceMap}
           targets={targets}
           setMap={setMap}
