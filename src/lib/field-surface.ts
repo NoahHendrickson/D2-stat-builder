@@ -1,4 +1,16 @@
+import { cn } from "@/lib/utils";
+
 export const fieldControlHeightClasses = "h-8 shrink-0 box-border";
+
+/** Shared outer box for inputs and field triggers (search, filters, selects). */
+export const fieldControlShellClasses = cn(
+  fieldControlHeightClasses,
+  "rounded-[6px] border border-transparent bg-clip-padding",
+);
+
+/** Neutralize native button styles that can shrink triggers below h-8. */
+export const fieldControlTriggerResetClasses =
+  "inline-flex appearance-none m-0 py-0 leading-none";
 
 export const field3dSurfaceClasses =
   "relative isolate before:absolute before:-inset-x-px before:-top-px before:-bottom-[5px] before:z-[-2] before:rounded-[6px] before:border before:border-[var(--neutral-line)] before:bg-[var(--neutral-shadow)] before:content-[''] after:absolute after:-inset-px after:z-[-1] after:rounded-[6px] after:border after:border-[var(--neutral-line)] after:bg-background after:transition-colors after:content-[''] hover:after:bg-muted"

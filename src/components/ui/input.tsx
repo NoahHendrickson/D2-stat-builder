@@ -8,7 +8,7 @@ import {
   field3dFocusClasses,
   field3dInvalidHasClasses,
   field3dSurfaceClasses,
-  fieldControlHeightClasses,
+  fieldControlShellClasses,
 } from "@/lib/field-surface"
 import { cn } from "@/lib/utils"
 
@@ -17,7 +17,7 @@ function Input({ className, type, ...props }: React.ComponentProps<"input">) {
     <div
       className={cn(
         "w-full",
-        fieldControlHeightClasses,
+        fieldControlShellClasses,
         field3dSurfaceClasses,
         field3dFocusClasses,
         field3dInvalidHasClasses,
