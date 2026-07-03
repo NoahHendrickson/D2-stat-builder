@@ -740,8 +740,8 @@ export function BuilderPanel({
                                 : 0,
                             );
                           }}
-                          className="w-14 tabular-nums"
-                          style={{ textAlign: "right" }}
+                          className="w-12 tabular-nums"
+                          style={{ textAlign: "center" }}
                         />
                         {cap !== null && (
                           <>
