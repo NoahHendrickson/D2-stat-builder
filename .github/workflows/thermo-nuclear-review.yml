@@ -1,0 +1,73 @@
+name: Thermo-nuclear code quality review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, synchronize]
+
+# Coalesce rapid pushes: a new commit cancels an in-flight review of the stale diff
+concurrency:
+  group: thermo-nuclear-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run thermo-nuclear review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Run a thermo-nuclear code quality review of this pull request.
+
+            First read .claude/skills/thermo-nuclear-code-quality-review/SKILL.md and
+            apply every standard in it — the ambition bar, the 1k-line rule, the
+            spaghetti-growth rules, the approval bar. Use `gh pr diff` and
+            `gh pr view` to get the change set, and read surrounding source files as
+            needed to judge structure, boundaries, and whether canonical helpers
+            already exist.
+
+            Then post your review as a single PR comment (`gh pr comment`) in exactly
+            this format:
+
+            ## Thermo-nuclear code quality review
+
+            **Verdict: <Approve | Request changes>** — <one sentence naming what is
+            right and what is wrong at the structural level>
+
+            ### What landed well
+            - <bullets citing concrete files/symbols>
+
+            ### Structural issues (priority order)
+            1. **<one-line issue statement>.** <what and where, why it is a problem,
+               and the concrete remedy — name the code-judo move if one exists>
+
+            <closing paragraph: file-size notes if relevant, and what would earn a
+            re-review>
+
+            Rules:
+            - Post exactly one comment. Do not create a formal GitHub review, do not
+              push commits, do not edit files.
+            - A small number of high-conviction structural findings beats a long list
+              of nits. If nothing structural is wrong, say so briefly and approve.
+            - If this workflow already reviewed this PR (look for an earlier
+              "Thermo-nuclear code quality review" comment via
+              `gh pr view --comments`), review the full current diff fresh and note
+              which previous findings were addressed.
+          claude_args: |
+            --allowedTools "Read,Grep,Glob,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*)"
