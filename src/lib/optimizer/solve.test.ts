@@ -469,7 +469,10 @@ describe("legacy exotics (artifice +3)", () => {
   });
 });
 
-describe("dominance pruning", () => {
+// These pin the dedupe grouping semantics: pieces that differ in exotic-ness,
+// artifice, set membership, or tuning must never collapse into (or shadow) each other,
+// even when one has strictly better stats.
+describe("dedupe grouping", () => {
   const zeros = (id: string): OptimizerPiece => piece(id, [0, 0, 0, 0, 0, 0]);
   const restSlots = [[zeros("a")], [zeros("b")], [zeros("c")], [zeros("d")]];
 
@@ -518,17 +521,9 @@ describe("dominance pruning", () => {
     const on = solve(input(slots, { allowTuning: true, minimums: [0, 0, 0, 0, 30, 0] }));
     expect(on.loadouts.length).toBeGreaterThan(0);
     expect(on.loadouts[0].pieceIds[0]).toBe("ts");
-    // With tuning off the tune signatures collapse into one group and ts is pruned —
-    // results must still match an unpruned run exactly.
-    const cfg = input(slots, { allowTuning: false });
-    const pruned = solve(cfg);
-    const unpruned = solve(cfg, { dominancePruning: false });
-    expect(pruned.combosTried).toBeLessThan(unpruned.combosTried); // ts was pruned
-    expect(pruned.loadouts[0].total).toBe(unpruned.loadouts[0].total);
-    expect(pruned.ceilings).toEqual(unpruned.ceilings);
   });
 
-  test("a stat-worse set piece survives only while its set is required", () => {
+  test("a stat-worse set piece is still found when its set is required", () => {
     const slots = [
       [piece("noset", [30, 0, 0, 0, 0, 0]), { ...piece("coda", [10, 0, 0, 0, 0, 0]), setHash: 7 }],
       ...restSlots,
@@ -538,12 +533,6 @@ describe("dominance pruning", () => {
     );
     expect(withReq.loadouts.length).toBeGreaterThan(0);
     expect(withReq.loadouts[0].pieceIds[0]).toBe("coda");
-    // Without the requirement the set piece is dominated and pruned; results must
-    // match an unpruned run exactly.
-    const pruned = solve(input(slots));
-    const unpruned = solve(input(slots), { dominancePruning: false });
-    expect(pruned.loadouts[0].total).toBe(unpruned.loadouts[0].total);
-    expect(pruned.ceilings).toEqual(unpruned.ceilings);
   });
 });
 
@@ -592,96 +581,6 @@ describe("exotic pre-filter", () => {
     expect(filtered.loadouts.length).toBeGreaterThan(0);
     expect(filtered.loadouts[0].pieceIds[0]).toBe("xh");
   });
-});
-
-describe("dominance pruning equivalence (real pool)", () => {
-  const slots = ["helmet", "arms", "chest", "legs", "classItem"].map((slot) =>
-    REAL_WARLOCK_POOL.filter((p) => p.slot === slot).map((p, i) => ({
-      id: `${slot}${i}`,
-      stats: p.stats,
-      exotic: p.exo === 1,
-      setHash: p.set || undefined,
-      tuning: { tuned: p.tuned, offStats: p.off },
-    })),
-  );
-  const configs: [string, OptimizerInput][] = [
-    ["unconstrained", { slots, minimums: [0, 0, 0, 0, 0, 0], allowTuning: true }],
-    [
-      "tight real-world targets",
-      {
-        slots,
-        minimums: [180, 0, 0, 110, 0, 0],
-        mods: { major: 3, minor: 2 },
-        setRequirements: [{ setHash: 1490136267, count: 4 }],
-        exotic: { mode: "any" },
-        allowTuning: true,
-        fragmentBonus: [0, 0, 10, -20, 0, 0],
-      },
-    ],
-    [
-      "tuning off",
-      {
-        slots,
-        minimums: [100, 60, 0, 0, 0, 0],
-        mods: { major: 2, minor: 3 },
-        allowTuning: false,
-      },
-    ],
-    [
-      "exotic required",
-      {
-        slots,
-        minimums: [120, 0, 0, 80, 0, 0],
-        mods: { major: 3, minor: 2 },
-        exotic: { mode: "require" },
-        allowTuning: true,
-      },
-    ],
-    [
-      "no exotics",
-      {
-        slots,
-        minimums: [0, 90, 90, 0, 0, 0],
-        mods: { major: 0, minor: 5 },
-        exotic: { mode: "none" },
-        allowTuning: true,
-      },
-    ],
-  ];
-
-  test.each(configs)(
-    "pruned run matches unpruned optimum: %s",
-    (name, cfg) => {
-      // Generous budgets so neither run is time-capped — the comparison is only
-      // meaningful between two exhaustive searches.
-      const budgets = { topNBudgetMs: 60_000, ceilingBudgetMs: 15_000 };
-      const pruned = solve(cfg, budgets);
-      const unpruned = solve(cfg, { ...budgets, dominancePruning: false });
-      expect(pruned.capped).toBe(false);
-      expect(unpruned.capped).toBe(false);
-      console.info(
-        `[pareto] ${name}: combosTried ${unpruned.combosTried} -> ${pruned.combosTried}` +
-          ` (${((1 - pruned.combosTried / Math.max(1, unpruned.combosTried)) * 100).toFixed(1)}% fewer)`,
-      );
-      expect(pruned.combosTried).toBeLessThanOrEqual(unpruned.combosTried);
-      // Same feasibility and same optimum.
-      expect(pruned.loadouts.length > 0).toBe(unpruned.loadouts.length > 0);
-      if (unpruned.loadouts.length > 0) {
-        expect(pruned.loadouts[0].total).toBe(unpruned.loadouts[0].total);
-      }
-      // Rank-for-rank, the unpruned top-N can only be >= (dominated alternates may
-      // drop out of the pruned list's tail, replaced by lower-total builds).
-      const n = Math.min(pruned.loadouts.length, unpruned.loadouts.length);
-      for (let i = 0; i < n; i++) {
-        expect(unpruned.loadouts[i].total).toBeGreaterThanOrEqual(
-          pruned.loadouts[i].total,
-        );
-      }
-      // Exact ceilings are identical when both refinements complete in budget.
-      expect(pruned.ceilings).toEqual(unpruned.ceilings);
-    },
-    180_000,
-  );
 });
 
 /**

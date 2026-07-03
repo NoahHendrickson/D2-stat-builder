@@ -16,7 +16,6 @@ import {
   makeInternalPiece,
   type InternalPiece,
 } from "./tuning";
-import { paretoWithinGroup } from "./pareto";
 
 const DEFAULT_MAX_RESULTS = 200;
 /**
@@ -44,19 +43,22 @@ const PROGRESS_INTERVAL_MS = 100;
 
 /**
  * Collapse pieces with an identical stat vector (+ exotic, + set, + tuning) to one
- * representative, then drop Pareto-dominated pieces within each dominance group (same
- * key minus the stat vector — see paretoWithinGroup for the soundness argument). The
- * group key is carved out of the very same expression as the dedupe key so the two can
- * never drift apart.
+ * representative.
+ *
+ * NOTE — dominance (Pareto) pruning was implemented here and measured (2026-07-03):
+ * on Armor 3.0 pools it removes NOTHING, because every Tier-5 piece carries the same
+ * fixed 90-point stat budget and domination requires a strictly greater total. It was
+ * removed rather than left dormant: its soundness also depends on constraints being
+ * stat MINIMUMS only, so a future stat-maximum / waste-limit feature would have made
+ * it silently unsound. If gear stat totals ever vary again (e.g. legacy legendary
+ * support), recover the filter and its tests from commit a3a6f61.
  */
 function dedupe(
   pieces: OptimizerPiece[],
   keyIncludesSet: boolean,
   allowTuning: boolean,
-  dominancePruning: boolean,
 ): InternalPiece[] {
-  const seen = new Set<string>();
-  const groups = new Map<string, InternalPiece[]>();
+  const map = new Map<string, InternalPiece>();
   for (const p of pieces) {
     // Two pieces with the same stats but different tuned stats aren't interchangeable
     // (except exotics, whose flexible slot makes the rolled tuned stat irrelevant).
@@ -64,28 +66,17 @@ function dedupe(
       allowTuning && p.tuning
         ? `${p.exotic ? "X" : p.tuning.tuned}:${p.tuning.offStats.join(".")}`
         : "-";
-    const groupKey =
+    const key =
       (p.exotic ? `E${p.hash ?? 0}` : "L") +
       (p.artifice ? "A" : "") +
       (keyIncludesSet ? `|${p.setHash ?? 0}|` : "|") +
-      `T${tuneKey}`;
-    const fullKey = groupKey + "|" + p.stats.join(",");
-    if (seen.has(fullKey)) continue;
-    seen.add(fullKey);
-    const piece = makeInternalPiece(p, allowTuning);
-    const group = groups.get(groupKey);
-    if (group) {
-      group.push(piece);
-    } else {
-      groups.set(groupKey, [piece]);
+      `T${tuneKey}|` +
+      p.stats.join(",");
+    if (!map.has(key)) {
+      map.set(key, makeInternalPiece(p, allowTuning));
     }
   }
-  const out: InternalPiece[] = [];
-  for (const group of groups.values()) {
-    const kept = dominancePruning ? paretoWithinGroup(group) : group;
-    for (const piece of kept) out.push(piece);
-  }
-  return out;
+  return Array.from(map.values());
 }
 
 /**
@@ -249,12 +240,9 @@ class TopNHeap {
  * Build the per-slot search pool shared by solve() and solveCeilings(): pre-filter
  * pieces the exotic constraint excludes (they can never appear in a valid loadout,
  * but left in the pool they inflate every suffix bound — looser bounds → less
- * pruning — and slot sizes), then dedupe + dominance-prune, sorted by total.
+ * pruning — and slot sizes), then dedupe, sorted by total.
  */
-function buildSlots(
-  input: OptimizerInput,
-  dominancePruning: boolean,
-): InternalPiece[][] {
+function buildSlots(input: OptimizerInput): InternalPiece[][] {
   const reqs = input.setRequirements ?? [];
   const allowTuning = input.allowTuning ?? true;
   const exoticMode = input.exotic?.mode ?? "any";
@@ -266,7 +254,7 @@ function buildSlots(
       : exoticMode !== "specific" ||
         (p.hash !== undefined && !!exoticHashes?.includes(p.hash)));
   return input.slots.map((s) =>
-    dedupe(s.filter(eligible), reqs.length > 0, allowTuning, dominancePruning).sort(
+    dedupe(s.filter(eligible), reqs.length > 0, allowTuning).sort(
       (a, b) => b.total - a.total,
     ),
   );
@@ -287,12 +275,6 @@ export interface SolveOptions {
   topNBudgetMs?: number;
   /** Wall-clock cap for refining the ceilings past their seeds (defaults to CEILING_BUDGET_MS). */
   ceilingBudgetMs?: number;
-  /**
-   * Drop Pareto-dominated pieces before the search (defaults to true). Never changes
-   * the best totals or the exact ceilings — the escape hatch exists only so tests can
-   * compare pruned vs unpruned runs and measure the reduction.
-   */
-  dominancePruning?: boolean;
   /**
    * Per-stat floor for the ceiling seeds. MUST be proven-achievable for this exact
    * input (e.g. a prior pass's refined ceilings for the SAME query) — the refinement
@@ -328,7 +310,7 @@ export function solve(
       ? p.hash !== undefined && !!exoticHashes?.includes(p.hash)
       : true);
 
-  const slots = buildSlots(input, opts.dominancePruning ?? true);
+  const slots = buildSlots(input);
   if (slots.length !== NUM_SLOTS || slots.some((s) => s.length === 0)) {
     return {
       loadouts: [],
@@ -546,7 +528,7 @@ export function solveCeilings(
   onCeilings?: (ceilings: number[]) => void,
   onProbe?: () => void,
 ): number[] {
-  const slots = buildSlots(input, true);
+  const slots = buildSlots(input);
   if (slots.length !== NUM_SLOTS || slots.some((s) => s.length === 0)) {
     return seed.slice(0, NUM_STATS);
   }
