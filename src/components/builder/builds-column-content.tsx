@@ -11,8 +11,7 @@ import type { ArmorSetInfo } from "@/lib/armory/sets";
 import type { ArmoryCharacter } from "@/lib/armory/fetch";
 import type { StatIconMap } from "@/lib/armory/stats";
 import type { StatModHashes } from "@/lib/dim/mod-hashes";
-import type { OptimizerOutput } from "@/lib/optimizer/types";
-import type { RefineOutcome } from "@/lib/optimizer/use-optimizer";
+import type { OptimizerOutput, RefinementState } from "@/lib/optimizer/types";
 
 const LOADING_ROWS = 5;
 
@@ -73,14 +72,8 @@ export interface BuildsColumnContentProps {
   running: boolean;
   result: OptimizerOutput | null;
   displayedProgress: number;
-  /** A capped search is still refining in the background (interim results shown). */
-  refining: boolean;
-  /** 0–1 progress of the background refinement pass. */
-  refineProgress: number;
-  /** How the last background refinement resolved (null = none ran / still running). */
-  refineOutcome: RefineOutcome;
-  /** A strictly-better background list is waiting behind the "show them" action. */
-  hasPending: boolean;
+  /** Background-refinement lifecycle (idle / running / done, with any pending list). */
+  refinement: RefinementState;
   /** Apply the waiting better list (the explicit user action that changes the list). */
   onShowPending: () => void;
   onCancel: () => void;
@@ -103,10 +96,7 @@ export function BuildsColumnContent({
   running,
   result,
   displayedProgress,
-  refining,
-  refineProgress,
-  refineOutcome,
-  hasPending,
+  refinement,
   onShowPending,
   onCancel,
   pieceMap,
@@ -154,10 +144,7 @@ export function BuildsColumnContent({
       ) : result ? (
         <BuildResults
           result={result}
-          refining={refining}
-          refineProgress={refineProgress}
-          refineOutcome={refineOutcome}
-          hasPending={hasPending}
+          refinement={refinement}
           onShowPending={onShowPending}
           pieceMap={pieceMap}
           targets={targets}

@@ -113,6 +113,33 @@ export interface OptimizerOutput {
   capped: boolean;
 }
 
+/**
+ * How a background refinement resolved: "improved" = it proved higher per-stat maxima
+ * than the capped search reported (the slider overlays rose — raise a target to
+ * explore); "confirmed" = the background build search ran to exhaustion and found no
+ * higher maxima (a proven "nothing better exists").
+ */
+export type RefineOutcome = "improved" | "confirmed";
+
+/**
+ * View model of the background refinement lifecycle, driven by the worker protocol
+ * below. The shown build list is frozen by design — refinement surfaces only as the
+ * stat ceilings rising and, when the background search strictly beats the frozen
+ * list, as a `pending` replacement that is applied only on explicit user action.
+ * `pending` exists on "running" because the "better" message arrives just before the
+ * final result. A "done" outcome of null means the background pass itself timed out
+ * unverified (the time-limit messaging stays).
+ */
+export type RefinementState =
+  | { phase: "idle" }
+  | {
+      phase: "running";
+      progress: number;
+      interim: OptimizerOutput;
+      pending: OptimizerOutput | null;
+    }
+  | { phase: "done"; outcome: RefineOutcome | null; pending: OptimizerOutput | null };
+
 /** Main thread → worker: a search request tagged with a monotonically increasing seq. */
 export interface OptimizerRequest {
   seq: number;

@@ -21,7 +21,6 @@ import {
   type StatIconMap,
 } from "@/lib/armory/stats";
 import type { StatModHashes } from "@/lib/dim/mod-hashes";
-import type { RefineOutcome } from "@/lib/optimizer/use-optimizer";
 import {
   buildDimLoadout,
   buildDimLoadoutUrl,
@@ -40,6 +39,7 @@ import type {
   AppliedTuning,
   OptimizerLoadout,
   OptimizerOutput,
+  RefinementState,
 } from "@/lib/optimizer/types";
 
 const MAX_SHOWN = 25;
@@ -571,88 +571,87 @@ function BuildActions({
  * Search-exactness status above the results. The build list below never changes on its
  * own once shown; post-cap discovery surfaces as the stat sliders' max overlays rising
  * and, when the background search strictly beats the frozen list, as a "Show them"
- * action (the explicit user input that swaps the list). States, in priority order:
- * background refinement running (live progress), a waiting better list (+ optionally
+ * action (the explicit user input that swaps the list). Rendered off the refinement
+ * lifecycle: running (live progress), done with a waiting better list (+ optionally
  * higher maxima), higher maxima only, a verified all-clear, or the plain time-limit
- * banner (background never resolved, e.g. a worker error or an unverified quiet pass).
+ * banner (refinement never resolved, e.g. a worker error or an unverified quiet pass).
  */
 function SearchStatus({
   capped,
-  refining,
-  refineProgress,
-  refineOutcome,
-  hasPending,
+  refinement,
   onShowPending,
 }: {
   capped: boolean;
-  refining: boolean;
-  refineProgress: number;
-  refineOutcome: RefineOutcome;
-  hasPending: boolean;
+  refinement: RefinementState;
   onShowPending: () => void;
 }) {
-  if (refining) {
-    return (
-      <p className="text-foreground/85 flex items-center gap-1.5 text-xs" aria-live="polite">
-        <CircleNotch className="animate-spin" aria-hidden />
-        Builds locked in — searching for higher maximums and stronger builds (
-        {Math.round(refineProgress * 100)}%)
-      </p>
-    );
+  const cappedBanner = capped ? (
+    <p className="text-xs text-amber-600/90 dark:text-amber-500/90">
+      Hit the time limit — showing the best found so far. Narrow your targets
+      for an exhaustive search.
+    </p>
+  ) : null;
+  switch (refinement.phase) {
+    case "idle":
+      return cappedBanner;
+    case "running":
+      return (
+        <p className="text-foreground/85 flex items-center gap-1.5 text-xs" aria-live="polite">
+          <CircleNotch className="animate-spin" aria-hidden />
+          Builds locked in — searching for higher maximums and stronger builds (
+          {Math.round(refinement.progress * 100)}%)
+        </p>
+      );
+    case "done": {
+      const { outcome, pending } = refinement;
+      const lines: ReactNode[] = [];
+      if (pending) {
+        lines.push(
+          <p
+            key="pending"
+            className="flex items-center gap-2 text-xs text-emerald-600/90 dark:text-emerald-500/90"
+            aria-live="polite"
+          >
+            Stronger builds found
+            <Button
+              variant="link"
+              onClick={onShowPending}
+              className="h-auto p-0 text-xs font-medium text-emerald-600 dark:text-emerald-500"
+            >
+              Show them
+            </Button>
+          </p>,
+        );
+      }
+      if (outcome === "improved") {
+        lines.push(
+          <p
+            key="improved"
+            className="text-xs text-emerald-600/90 dark:text-emerald-500/90"
+            aria-live="polite"
+          >
+            Higher stat maximums found — raise a stat target to explore them.
+          </p>,
+        );
+      } else if (outcome === "confirmed" && !pending) {
+        lines.push(
+          <p key="confirmed" className="text-muted-foreground text-xs" aria-live="polite">
+            Verified — no better builds or higher maximums exist for these targets.
+          </p>,
+        );
+      }
+      return lines.length > 0 ? <>{lines}</> : cappedBanner;
+    }
+    default: {
+      const _exhaustive: never = refinement;
+      return _exhaustive;
+    }
   }
-  const lines: ReactNode[] = [];
-  if (hasPending) {
-    lines.push(
-      <p
-        key="pending"
-        className="flex items-center gap-2 text-xs text-emerald-600/90 dark:text-emerald-500/90"
-        aria-live="polite"
-      >
-        Stronger builds found
-        <Button
-          variant="link"
-          onClick={onShowPending}
-          className="h-auto p-0 text-xs font-medium text-emerald-600 dark:text-emerald-500"
-        >
-          Show them
-        </Button>
-      </p>,
-    );
-  }
-  if (refineOutcome === "improved") {
-    lines.push(
-      <p
-        key="improved"
-        className="text-xs text-emerald-600/90 dark:text-emerald-500/90"
-        aria-live="polite"
-      >
-        Higher stat maximums found — raise a stat target to explore them.
-      </p>,
-    );
-  } else if (!hasPending && refineOutcome === "confirmed") {
-    lines.push(
-      <p key="confirmed" className="text-muted-foreground text-xs" aria-live="polite">
-        Verified — no better builds or higher maximums exist for these targets.
-      </p>,
-    );
-  }
-  if (lines.length === 0 && capped) {
-    return (
-      <p className="text-xs text-amber-600/90 dark:text-amber-500/90">
-        Hit the time limit — showing the best found so far. Narrow your targets
-        for an exhaustive search.
-      </p>
-    );
-  }
-  return lines.length > 0 ? <>{lines}</> : null;
 }
 
 export function BuildResults({
   result,
-  refining,
-  refineProgress,
-  refineOutcome,
-  hasPending,
+  refinement,
   onShowPending,
   pieceMap,
   targets,
@@ -667,10 +666,7 @@ export function BuildResults({
   onEquipped,
 }: {
   result: OptimizerOutput;
-  refining: boolean;
-  refineProgress: number;
-  refineOutcome: RefineOutcome;
-  hasPending: boolean;
+  refinement: RefinementState;
   onShowPending: () => void;
   pieceMap: Map<string, ArmorPiece>;
   targets: number[];
@@ -681,10 +677,7 @@ export function BuildResults({
   const status = (
     <SearchStatus
       capped={result.capped}
-      refining={refining}
-      refineProgress={refineProgress}
-      refineOutcome={refineOutcome}
-      hasPending={hasPending}
+      refinement={refinement}
       onShowPending={onShowPending}
     />
   );
