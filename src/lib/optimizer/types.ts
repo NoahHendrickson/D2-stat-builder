@@ -109,9 +109,50 @@ export interface OptimizerOutput {
    * guaranteed-achievable lower bound. All zero when there are no pieces.
    */
   ceilings: StatArray;
+  /**
+   * True when every ceiling was PROVEN exact (all refinement probes converged in
+   * budget). False means the ceilings are guaranteed-achievable lower bounds — real,
+   * but possibly understated — and must never be presented as proven maxima.
+   */
+  ceilingsExact: boolean;
   /** True if the top-N search hit its time budget and returned best-effort results. */
   capped: boolean;
 }
+
+/**
+ * How a background refinement resolved: "improved" = it proved higher per-stat maxima
+ * than the capped search reported (the slider overlays rose — raise a target to
+ * explore); "confirmed" = a fully proven "nothing better exists" — the build walk ran
+ * to exhaustion AND the ceilings are proven exact (`ceilingsExact`). Anything less
+ * proven resolves to a null outcome instead.
+ */
+export type RefineOutcome = "improved" | "confirmed";
+
+/**
+ * View model of the background refinement lifecycle, driven by the worker protocol
+ * below. The shown build list is frozen by design — refinement surfaces only as the
+ * stat ceilings rising and, when the background search strictly beats the frozen
+ * list, as a `pending` replacement that is applied only on explicit user action.
+ * `pending` exists on "running" because the "better" message arrives just before the
+ * final result. On "done", `verified` means the background build search ran to
+ * exhaustion (the frozen list is proven complete); an outcome of null with
+ * `verified: false` means the background pass itself timed out (the time-limit
+ * messaging stays).
+ */
+export type RefinementState =
+  | { phase: "idle" }
+  | {
+      phase: "running";
+      progress: number;
+      interim: OptimizerOutput;
+      pending: OptimizerOutput | null;
+    }
+  | {
+      phase: "done";
+      outcome: RefineOutcome | null;
+      pending: OptimizerOutput | null;
+      verified: boolean;
+    };
 
 /** Main thread → worker: a search request tagged with a monotonically increasing seq. */
 export interface OptimizerRequest {
@@ -121,10 +162,24 @@ export interface OptimizerRequest {
 
 /**
  * Worker → main thread, echoing the request's seq so stale runs can be dropped. Progress
- * (a 0–1 fraction) and ceilings (seed, then each refined stat) stream ahead of the final
- * "result", which carries the full output.
+ * (a 0–1 fraction) and ceilings (seed, then each refined stat) stream ahead of "result".
+ *
+ * A time-capped search posts its result with `refining: true` — its build list is frozen
+ * for this query (a list never changes under the reader) — then the background session
+ * refines the ceilings AND re-runs the build search exhaustively. If that beats the
+ * frozen list, a "better" message offers the replacement (the UI swaps it in only on an
+ * explicit user action). A final `refining: false` result always follows, carrying the
+ * SAME frozen loadouts with the refined ceilings; `verified` is true when the background
+ * build search ran to exhaustion (so "nothing better exists" is a proven claim).
  */
 export type OptimizerResponse =
   | { seq: number; kind: "progress"; progress: number }
   | { seq: number; kind: "ceilings"; ceilings: StatArray }
-  | { seq: number; kind: "result"; output: OptimizerOutput };
+  | { seq: number; kind: "better"; output: OptimizerOutput }
+  | {
+      seq: number;
+      kind: "result";
+      output: OptimizerOutput;
+      refining: boolean;
+      verified: boolean;
+    };

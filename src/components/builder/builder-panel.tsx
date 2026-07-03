@@ -96,7 +96,17 @@ export function BuilderPanel({
   const session = useSession();
   const armoryQuery = useArmory();
   const manifestStatus = useManifest();
-  const { run, cancel, result, ceilings, running, progress, runId } = useOptimizer();
+  const {
+    run,
+    cancel,
+    result,
+    ceilings,
+    running,
+    progress,
+    runId,
+    refinement,
+    applyPending,
+  } = useOptimizer();
   const { displayedProgress, showLoading } = useSmoothedProgress(
     progress,
     running,
@@ -575,6 +585,8 @@ export function BuilderPanel({
       running,
       result,
       displayedProgress,
+      refinement,
+      onShowPending: applyPending,
       onCancel: cancel,
       pieceMap,
       targets,
@@ -594,6 +606,8 @@ export function BuilderPanel({
       running,
       result,
       displayedProgress,
+      refinement,
+      applyPending,
       cancel,
       pieceMap,
       targets,

@@ -11,7 +11,7 @@ import type { ArmorSetInfo } from "@/lib/armory/sets";
 import type { ArmoryCharacter } from "@/lib/armory/fetch";
 import type { StatIconMap } from "@/lib/armory/stats";
 import type { StatModHashes } from "@/lib/dim/mod-hashes";
-import type { OptimizerOutput } from "@/lib/optimizer/types";
+import type { OptimizerOutput, RefinementState } from "@/lib/optimizer/types";
 
 const LOADING_ROWS = 5;
 
@@ -72,6 +72,10 @@ export interface BuildsColumnContentProps {
   running: boolean;
   result: OptimizerOutput | null;
   displayedProgress: number;
+  /** Background-refinement lifecycle (idle / running / done, with any pending list). */
+  refinement: RefinementState;
+  /** Apply the waiting better list (the explicit user action that changes the list). */
+  onShowPending: () => void;
   onCancel: () => void;
   pieceMap: Map<string, ArmorPiece>;
   targets: number[];
@@ -92,6 +96,8 @@ export function BuildsColumnContent({
   running,
   result,
   displayedProgress,
+  refinement,
+  onShowPending,
   onCancel,
   pieceMap,
   targets,
@@ -112,7 +118,9 @@ export function BuildsColumnContent({
       <div className="flex items-center justify-between gap-4">
         <h2 className="text-lg font-medium">Builds</h2>
         <div className="flex items-center gap-3">
-          {running && (
+          {/* Also offered during background refinement — that's when the worker burns
+              the most CPU and running is already false. */}
+          {(running || refinement.phase === "running") && (
             <Button
               variant="link"
               onClick={onCancel}
@@ -138,6 +146,8 @@ export function BuildsColumnContent({
       ) : result ? (
         <BuildResults
           result={result}
+          refinement={refinement}
+          onShowPending={onShowPending}
           pieceMap={pieceMap}
           targets={targets}
           setMap={setMap}

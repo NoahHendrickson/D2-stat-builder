@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, memo, useState, type ReactNode } from "react";
 import Image from "next/image";
 import {
   ArrowSquareOut,
@@ -39,6 +39,7 @@ import type {
   AppliedTuning,
   OptimizerLoadout,
   OptimizerOutput,
+  RefinementState,
 } from "@/lib/optimizer/types";
 
 const MAX_SHOWN = 25;
@@ -180,8 +181,13 @@ interface BuildActionProps {
   onEquipped?: () => void;
 }
 
-/** A single build: a collapsed stat header that expands to a per-piece breakdown. */
-function BuildRow({
+/**
+ * A single build: a collapsed stat header that expands to a per-piece breakdown.
+ * Memoized: background-refinement progress ticks re-render the results column ~10×/s
+ * while the list itself is frozen — every prop here is identity-stable across those
+ * ticks, so rows bail out and only the status line pays for the tick.
+ */
+const BuildRow = memo(function BuildRow({
   loadout,
   pieceMap,
   setMap,
@@ -405,7 +411,7 @@ function BuildRow({
       )}
     </div>
   );
-}
+});
 
 /**
  * Footer of an expanded build: copy the piece IDs as a DIM search, hand the
@@ -566,8 +572,107 @@ function BuildActions({
   );
 }
 
+/**
+ * Search-exactness status above the results. The build list below never changes on its
+ * own once shown; post-cap discovery surfaces as the stat sliders' max overlays rising
+ * and, when the background search strictly beats the frozen list, as a "Show them"
+ * action (the explicit user input that swaps the list). Rendered off the refinement
+ * lifecycle: running (live progress), done with a waiting better list (+ optionally
+ * higher maxima), higher maxima only, a verified all-clear, or the plain time-limit
+ * banner (refinement never resolved, e.g. a worker error or an unverified quiet pass).
+ */
+function SearchStatus({
+  capped,
+  refinement,
+  onShowPending,
+}: {
+  capped: boolean;
+  refinement: RefinementState;
+  onShowPending: () => void;
+}) {
+  const cappedBanner = capped ? (
+    <p className="text-xs text-amber-600/90 dark:text-amber-500/90">
+      Hit the time limit — showing the best found so far. Narrow your targets
+      for an exhaustive search.
+    </p>
+  ) : null;
+  switch (refinement.phase) {
+    case "idle":
+      return cappedBanner;
+    case "running":
+      return (
+        <p className="text-foreground/85 flex items-center gap-1.5 text-xs" aria-live="polite">
+          <CircleNotch className="animate-spin" aria-hidden />
+          First pass done — searching deeper for higher maximums and stronger builds (
+          {Math.round(refinement.progress * 100)}%)
+        </p>
+      );
+    case "done": {
+      const { outcome, pending, verified } = refinement;
+      const lines: ReactNode[] = [];
+      if (pending) {
+        lines.push(
+          <p
+            key="pending"
+            className="flex items-center gap-2 text-xs text-emerald-600/90 dark:text-emerald-500/90"
+            aria-live="polite"
+          >
+            Stronger builds found
+            <Button
+              variant="link"
+              onClick={onShowPending}
+              className="h-auto p-0 text-xs font-medium text-emerald-600 dark:text-emerald-500"
+            >
+              Show them
+            </Button>
+          </p>,
+        );
+      }
+      if (outcome === "improved") {
+        lines.push(
+          <p
+            key="improved"
+            className="text-xs text-emerald-600/90 dark:text-emerald-500/90"
+            aria-live="polite"
+          >
+            Higher stat maximums found — raise a stat target to explore them.
+          </p>,
+        );
+      } else if (outcome === "confirmed" && !pending) {
+        // Only rendered when both halves are PROVEN (walk exhausted + ceilings exact).
+        lines.push(
+          <p key="confirmed" className="text-muted-foreground text-xs" aria-live="polite">
+            Verified — no better builds or higher maximums exist for these targets.
+          </p>,
+        );
+      } else if (outcome === null && verified && !pending) {
+        // Build walk proven exhaustive, but some ceiling probes ran out of budget —
+        // claim only what was proven.
+        lines.push(
+          <p key="verified-list" className="text-muted-foreground text-xs" aria-live="polite">
+            Search complete — no better builds exist for these targets (stat maximums
+            shown are best-effort).
+          </p>,
+        );
+      }
+      // An unverified list stays flagged: the time-limit warning is never suppressed
+      // by an improved-maximums note or a pending offer.
+      if (!verified && cappedBanner) {
+        lines.push(<Fragment key="capped">{cappedBanner}</Fragment>);
+      }
+      return lines.length > 0 ? <>{lines}</> : null;
+    }
+    default: {
+      const _exhaustive: never = refinement;
+      return _exhaustive;
+    }
+  }
+}
+
 export function BuildResults({
   result,
+  refinement,
+  onShowPending,
   pieceMap,
   targets,
   setMap,
@@ -581,29 +686,41 @@ export function BuildResults({
   onEquipped,
 }: {
   result: OptimizerOutput;
+  refinement: RefinementState;
+  onShowPending: () => void;
   pieceMap: Map<string, ArmorPiece>;
   targets: number[];
   setMap: Map<number, ArmorSetInfo>;
   statIcons: StatIconMap;
   balancedTuningIcon?: string;
 } & BuildActionProps) {
+  const status = (
+    <SearchStatus
+      capped={result.capped}
+      refinement={refinement}
+      onShowPending={onShowPending}
+    />
+  );
   if (result.loadouts.length === 0) {
+    // The definitive "nothing meets those constraints" is only honest once no deeper
+    // search is running and no better list is waiting behind the CTA above.
+    const emptyCopy =
+      refinement.phase === "running"
+        ? "No builds found in the first pass yet — the deeper search is still running."
+        : refinement.phase === "done" && refinement.pending
+          ? "The first pass found none — use “Show them” above to load what the full search found."
+          : "No loadouts from your gear meet those constraints — even with mods. Try easing a target, a set bonus, or raising your mod budget.";
     return (
-      <p className="text-muted-foreground text-sm">
-        No loadouts from your gear meet those constraints — even with mods. Try
-        easing a target, a set bonus, or raising your mod budget.
-      </p>
+      <div className="space-y-3">
+        {status}
+        <p className="text-muted-foreground text-sm">{emptyCopy}</p>
+      </div>
     );
   }
 
   return (
     <div className="space-y-3">
-      {result.capped && (
-        <p className="text-xs text-amber-600/90 dark:text-amber-500/90">
-          Hit the time limit — showing the best found so far. Narrow your targets
-          for an exhaustive search.
-        </p>
-      )}
+      {status}
       <div className="space-y-1.5">
         {result.loadouts.slice(0, MAX_SHOWN).map((loadout, idx) => (
           <BuildRow

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { solve } from "./solve";
 import type { OptimizerInput, OptimizerPiece } from "./types";
-import { REAL_WARLOCK_POOL } from "./real-pool.fixture";
+import { realWarlockSlots } from "./real-pool.fixture";
 
 /** A tuning-free, set-free piece — stats sum straight into the loadout total. */
 function piece(id: string, stats: number[]): OptimizerPiece {
@@ -192,24 +192,61 @@ describe("ceiling refinement", () => {
     expect(out.ceilings).toEqual([70, 10, 10, 10, 10, 10]);
   });
 
+  test("ceilingsExact: proven on easy pools, false when refinement runs out of budget", () => {
+    // Single-loadout pool: optimistic bounds equal the seeds, nothing to probe — exact.
+    const easy = solve(
+      input([
+        [piece("h", [30, 0, 0, 0, 0, 0])],
+        [piece("a", [0, 20, 0, 0, 0, 0])],
+        [piece("c", [0, 0, 10, 0, 0, 0])],
+        [piece("l", [0, 0, 0, 40, 0, 0])],
+        [piece("ci", [0, 0, 0, 0, 15, 0])],
+      ]),
+    );
+    expect(easy.ceilingsExact).toBe(true);
+
+    // Real pool with tight targets and a ~1ms refinement budget: probes can't settle,
+    // so the ceilings are lower bounds and MUST NOT be flagged proven.
+    const hard = solve(
+      {
+        slots: realWarlockSlots(),
+        minimums: [190, 0, 0, 120, 0, 0],
+        mods: { major: 3, minor: 2 },
+        setRequirements: [{ setHash: 1490136267, count: 4 }],
+        allowTuning: true,
+        fragmentBonus: [0, 0, 10, -20, 0, 0],
+      },
+      { topNBudgetMs: 500, ceilingBudgetMs: 1 },
+    );
+    expect(hard.ceilingsExact).toBe(false);
+  });
+
+  test("ceilingSeed floors the seeds (trusted as proven-achievable)", () => {
+    const slots = [
+      [piece("h", [30, 0, 0, 0, 0, 0])],
+      [piece("a", [0, 20, 0, 0, 0, 0])],
+      [piece("c", [0, 0, 10, 0, 0, 0])],
+      [piece("l", [0, 0, 0, 40, 0, 0])],
+      [piece("ci", [0, 0, 0, 0, 15, 0])],
+    ];
+    // Budget 0 → ceilings ARE the seeds. The seed takes max(loadout-derived, ceilingSeed)
+    // per stat: weapons is lifted to the trusted 33, health keeps its own better 20.
+    const out = solve(input(slots), {
+      ceilingBudgetMs: 0,
+      ceilingSeed: [33, 5, 0, 0, 0, 0],
+    });
+    expect(out.ceilings).toEqual([33, 20, 10, 40, 15, 0]);
+  });
+
   test("a slow stat's refinement can't starve the stats after it (real-pool regression)", () => {
     // Noah's real Warlock pool with his exact selections (weapon ≥ 180, grenade ≥ 110,
     // CODA 4pc, 3 major + 2 minor mods, Solar fragments = class +10 / grenade −20).
     // Weapon-180 + grenade-135 builds exist in this pool, but the health ceiling probe
     // alone blows the whole refinement budget; sequential refinement aborted everything
     // after it and reported grenade's seed (110 — the user's own target) as its max.
-    const slots = ["helmet", "arms", "chest", "legs", "classItem"].map((slot) =>
-      REAL_WARLOCK_POOL.filter((p) => p.slot === slot).map((p, i) => ({
-        id: `${slot}${i}`,
-        stats: p.stats,
-        exotic: p.exo === 1,
-        setHash: p.set || undefined,
-        tuning: { tuned: p.tuned, offStats: p.off },
-      })),
-    );
     const out = solve(
       {
-        slots,
+        slots: realWarlockSlots(),
         minimums: [180, 0, 0, 110, 0, 0],
         mods: { major: 3, minor: 2 },
         setRequirements: [{ setHash: 1490136267, count: 4 }],
@@ -449,6 +486,120 @@ describe("legacy exotics (artifice +3)", () => {
     // If dedupe collapsed them the artifice version could be lost; the best build
     // must carry the +3.
     expect(out.loadouts[0].artificeBonus.reduce((a, b) => a + b, 0)).toBe(3);
+  });
+});
+
+// These pin the dedupe grouping semantics: pieces that differ in exotic-ness,
+// artifice, set membership, or tuning must never collapse into (or shadow) each other,
+// even when one has strictly better stats.
+describe("dedupe grouping", () => {
+  const zeros = (id: string): OptimizerPiece => piece(id, [0, 0, 0, 0, 0, 0]);
+  const restSlots = [[zeros("a")], [zeros("b")], [zeros("c")], [zeros("d")]];
+
+  test("a stat-better legendary never eliminates a required exotic", () => {
+    const slots = [
+      [
+        piece("leg", [30, 10, 0, 0, 0, 0]),
+        { id: "exo", stats: [20, 5, 0, 0, 0, 0], exotic: true, hash: 42 },
+      ],
+      ...restSlots,
+    ] as OptimizerPiece[][];
+    const out = solve(input(slots, { exotic: { mode: "require" } }));
+    expect(out.loadouts.length).toBeGreaterThan(0);
+    expect(out.loadouts[0].pieceIds[0]).toBe("exo");
+  });
+
+  test("a stat-worse artifice piece survives a better plain piece", () => {
+    const slots = [
+      [
+        piece("plain", [30, 0, 0, 0, 0, 0]),
+        { id: "art", stats: [28, 0, 0, 0, 0, 0], exotic: false, artifice: true },
+      ],
+      ...restSlots,
+    ] as OptimizerPiece[][];
+    // Weapons 31 is only reachable as art's 28 + its free artifice +3; plain caps at 30.
+    const out = solve(input(slots, { minimums: [31, 0, 0, 0, 0, 0] }));
+    expect(out.loadouts.length).toBe(1);
+    expect(out.loadouts[0].pieceIds[0]).toBe("art");
+  });
+
+  test("a stat-worse piece with a different tuned stat survives while tuning is on", () => {
+    const tunedSuper: OptimizerPiece = {
+      id: "ts",
+      stats: [10, 5, 5, 0, 25, 0],
+      exotic: false,
+      tuning: { tuned: 4, offStats: [1, 2, 3] },
+    };
+    const tunedWeapons: OptimizerPiece = {
+      id: "tw",
+      stats: [12, 6, 6, 0, 25, 0], // dominates ts on raw stats
+      exotic: false,
+      tuning: { tuned: 0, offStats: [1, 2, 3] },
+    };
+    const slots = [[tunedSuper, tunedWeapons], ...restSlots] as OptimizerPiece[][];
+    // Super 30 needs a directional +5 into super — only ts is tuned to super.
+    const on = solve(input(slots, { allowTuning: true, minimums: [0, 0, 0, 0, 30, 0] }));
+    expect(on.loadouts.length).toBeGreaterThan(0);
+    expect(on.loadouts[0].pieceIds[0]).toBe("ts");
+  });
+
+  test("a stat-worse set piece is still found when its set is required", () => {
+    const slots = [
+      [piece("noset", [30, 0, 0, 0, 0, 0]), { ...piece("coda", [10, 0, 0, 0, 0, 0]), setHash: 7 }],
+      ...restSlots,
+    ] as OptimizerPiece[][];
+    const withReq = solve(
+      input(slots, { setRequirements: [{ setHash: 7, count: 1 }] }),
+    );
+    expect(withReq.loadouts.length).toBeGreaterThan(0);
+    expect(withReq.loadouts[0].pieceIds[0]).toBe("coda");
+  });
+});
+
+describe("exotic pre-filter", () => {
+  const exo = (id: string, hash: number, stats: number[]): OptimizerPiece => ({
+    id,
+    stats,
+    exotic: true,
+    hash,
+  });
+  const mixedSlots = (): OptimizerPiece[][] => [
+    [piece("h1", [30, 0, 0, 0, 0, 0]), exo("xh", 1, [40, 0, 0, 0, 0, 0])],
+    [piece("a1", [0, 20, 0, 0, 0, 0]), exo("xa", 2, [0, 30, 0, 0, 0, 0])],
+    [piece("c1", [0, 0, 10, 0, 0, 0])],
+    [piece("l1", [0, 0, 0, 40, 0, 0])],
+    [piece("k1", [0, 0, 0, 0, 15, 0])],
+  ];
+  const strip = (
+    slots: OptimizerPiece[][],
+    keep: (p: OptimizerPiece) => boolean,
+  ): OptimizerPiece[][] => slots.map((s) => s.filter(keep));
+
+  test("mode none behaves exactly like a pool with no exotics", () => {
+    const filtered = solve(input(mixedSlots(), { exotic: { mode: "none" } }));
+    const stripped = solve(input(strip(mixedSlots(), (p) => !p.exotic)));
+    expect(filtered.loadouts.map((l) => l.total)).toEqual(
+      stripped.loadouts.map((l) => l.total),
+    );
+    expect(filtered.ceilings).toEqual(stripped.ceilings);
+    // Identical pool after the pre-filter → identical walk, not merely equal results.
+    expect(filtered.combosTried).toBe(stripped.combosTried);
+  });
+
+  test("mode specific behaves exactly like a pool holding only the chosen exotic", () => {
+    const cfg = { exotic: { mode: "specific" as const, hashes: [1] } };
+    const filtered = solve(input(mixedSlots(), cfg));
+    const stripped = solve(
+      input(strip(mixedSlots(), (p) => !p.exotic || p.hash === 1), cfg),
+    );
+    expect(filtered.loadouts.map((l) => l.total)).toEqual(
+      stripped.loadouts.map((l) => l.total),
+    );
+    expect(filtered.ceilings).toEqual(stripped.ceilings);
+    expect(filtered.combosTried).toBe(stripped.combosTried);
+    // The chosen exotic is still found and used.
+    expect(filtered.loadouts.length).toBeGreaterThan(0);
+    expect(filtered.loadouts[0].pieceIds[0]).toBe("xh");
   });
 });
 
