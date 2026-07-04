@@ -163,10 +163,30 @@ export type RefinementState =
       verified: boolean;
     };
 
+/**
+ * Proven ceiling bounds carried from the previous query's result into the next solve when
+ * the queries differ only in their minimums (see carryover.ts for the soundness argument
+ * behind each field). Both are values the solver already trusts as proven for the exact
+ * query it is about to run: `ceilingSeed` = per-stat proven-achievable lows, and
+ * `ceilingUpperSeed` = per-stat proven upper bounds. A wrong value in either would
+ * silently corrupt the reported ceilings.
+ */
+export interface CeilingCarry {
+  ceilingSeed?: number[];
+  ceilingUpperSeed?: number[];
+}
+
 /** Main thread → worker: a search request tagged with a monotonically increasing seq. */
 export interface OptimizerRequest {
   seq: number;
   input: OptimizerInput;
+  /**
+   * Proven ceiling bounds carried from the previous query's result (see carryover.ts),
+   * present only when the previous query differs from this one solely in its minimums.
+   * The worker threads these into the FIRST solve as seeds it already trusts, so the
+   * common adjust-a-slider edit skips re-proving what the prior query established.
+   */
+  carry?: CeilingCarry;
 }
 
 /**

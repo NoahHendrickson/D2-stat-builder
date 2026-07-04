@@ -136,11 +136,41 @@
  * Step 3 strictly improves on (b) in both scenarios. Exact ceilings stay bit-identical
  * across all variants and Steps 1–2 — uppers only ever shrink on a PROVEN infeasible
  * probe, so the reported maxima can't drift.
+ *
+ * After Step 4 (edit-loop carryover) — captured 2026-07-03, same machine, single run.
+ * NEW edit-loop scenario: this is the adjust-a-slider-then-wait loop the whole plan
+ * targets. Solve query A (realWarlockTwoSetInput, grenade ≥105) to a proven-exact output,
+ * then TIGHTEN grenade 105→120 and time the tightened query's to-exact WITH the cross-edit
+ * carry (carried achievable lows + carried proven uppers from computeCeilingCarry) vs COLD
+ * (the tightened query's own top-N seed, no uppers). This measures the actual user-facing
+ * win: what a slider bump costs when the prior query's bounds carry over vs from scratch.
+ *
+ * Scenario: edit-loop realWarlockTwoSetInput (grenade 105→120)
+ *   A exact ceilings: [200, 55, 115, 145, 125, 105]
+ *   carry seed:       [180, 38, 85, 125, 105, 71]   (survivor-derived achievable lows)
+ *   carry upperSeed:  [200, 55, 115, 145, 125, 105] (query A's proven uppers)
+ *   COLD to exact:    4730 ms,
+ *                     ceilings [200, 55, 110, 145, 125, 105],
+ *                     stats { probes: 31, feasible: 11, disproven: 20, timedOut: 0, nodes: 32772917 }
+ *   CARRY to exact:   448 ms,
+ *                     ceilings [200, 55, 110, 145, 125, 105]  (bit-identical to COLD),
+ *                     stats { probes: 19, feasible: 17, disproven: 2, timedOut: 0, nodes: 2569017 }
+ *
+ * Step 4 takeaway: the carry turns a ~4.7s re-derivation into ~0.45s — ~10.5x faster,
+ * ~12.8x fewer DFS nodes (32.8M → 2.6M), probes 31→19 with disproven collapsing 20→2 (the
+ * carried uppers close most stats' upper windows before any expensive disproof runs, so the
+ * survivors are mostly cheap feasible re-confirmations). Same exact answer as COLD — carry
+ * only removes re-proof work; it never changes a ceiling. The two prior scenarios re-run in
+ * this same pass and their exact ceilings stay bit-identical to Steps 1–3
+ * ([200,55,115,145,125,105] and [200,60,120,130,95,95]): Step 4 adds only OPTIONAL seeds to
+ * the first solve, so the cold path is untouched.
  */
 import { test } from "vitest";
+import { computeCeilingCarry } from "./carryover";
+import { runSolveSession } from "./session";
 import { solve, solveCeilings } from "./solve";
 import { realWarlockCodaInput, realWarlockTwoSetInput } from "./real-pool.fixture";
-import type { OptimizerInput } from "./types";
+import type { OptimizerInput, OptimizerOutput } from "./types";
 
 const bench = process.env.BENCH ? test : test.skip;
 
@@ -216,4 +246,75 @@ bench(
     runScenario("realWarlockCodaInput", realWarlockCodaInput());
   },
   300_000,
+);
+
+/**
+ * Step 4 edit-loop scenario: the adjust-a-slider-then-wait loop the whole plan targets.
+ * Solve query A to a proven-exact output (production shape: an inline solve that settles
+ * its ceilings), then TIGHTEN grenade 105 → 120 — a pure-tightening minimum edit — and
+ * measure the tightened query's time-to-exact WITH the carry (carried achievable lows +
+ * carried proven uppers, both from computeCeilingCarry) vs COLD (the tightened query's own
+ * top-N seed, no uppers). Both must reach bit-identical exact ceilings; the carry should
+ * only cut the probe/node/time cost of re-proving what query A already established.
+ */
+function runEditLoop(name: string, inputA: OptimizerInput) {
+  // Solve A the way production would, capturing its final proven output via the session.
+  let outputA: OptimizerOutput | undefined;
+  runSolveSession(
+    inputA,
+    {
+      onProgress: () => {},
+      onCeilings: () => {},
+      onBetter: () => {},
+      onResult: (out, refining) => {
+        if (!refining) outputA = out;
+      },
+    },
+    { topNBudgetMs: 60_000, ceilingBudgetMs: EXACT_BUDGET_MS },
+  );
+  if (!outputA) throw new Error("query A produced no final result");
+
+  const inputB: OptimizerInput = {
+    ...inputA,
+    minimums: inputA.minimums.map((v, s) => (s === 3 ? 120 : v)),
+  };
+  const carry = computeCeilingCarry(inputA, outputA, inputB);
+  if (!carry) throw new Error("expected a carry for a pure-tightening edit");
+
+  // COLD: the tightened query solved from scratch — its own top-N seed, no carried uppers.
+  const coldFirst = solve(inputB, { ceilingBudgetMs: 0 });
+  const coldStart = performance.now();
+  const cold = solveCeilings(inputB, coldFirst.ceilings, EXACT_BUDGET_MS);
+  const coldElapsed = performance.now() - coldStart;
+
+  // CARRY: seeded with the carried achievable lows AND carried proven uppers.
+  const carrySeed = carry.ceilingSeed ?? coldFirst.ceilings;
+  const carryStart = performance.now();
+  const carried = solveCeilings(inputB, carrySeed, EXACT_BUDGET_MS, {
+    upperSeed: carry.ceilingUpperSeed,
+  });
+  const carryElapsed = performance.now() - carryStart;
+
+  console.log(`\n[bench] edit-loop ${name} (grenade 105→120)`);
+  console.log(`  A exact ceilings: ${JSON.stringify(outputA.ceilings)}`);
+  console.log(`  carry seed:       ${JSON.stringify(carrySeed)}`);
+  console.log(`  carry upperSeed:  ${JSON.stringify(carry.ceilingUpperSeed)}`);
+  console.log(`  COLD to exact:    elapsed=${coldElapsed.toFixed(0)}ms`, {
+    ceilings: cold.ceilings,
+    exact: cold.exact,
+    stats: cold.stats,
+  });
+  console.log(`  CARRY to exact:   elapsed=${carryElapsed.toFixed(0)}ms`, {
+    ceilings: carried.ceilings,
+    exact: carried.exact,
+    stats: carried.stats,
+  });
+}
+
+bench(
+  "edit-loop realWarlockTwoSetInput",
+  () => {
+    runEditLoop("realWarlockTwoSetInput", realWarlockTwoSetInput());
+  },
+  600_000,
 );

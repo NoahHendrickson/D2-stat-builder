@@ -1,5 +1,9 @@
 import { runSolveSession } from "./session";
-import type { OptimizerRequest, OptimizerResponse } from "./types";
+import type {
+  OptimizerOutput,
+  OptimizerRequest,
+  OptimizerResponse,
+} from "./types";
 
 // Runs the (CPU-heavy) combinatorial search off the main thread. Streams progress and
 // ceiling updates as they refine, then posts the result — a capped search posts its
@@ -9,15 +13,15 @@ import type { OptimizerRequest, OptimizerResponse } from "./types";
 const ctx = self as unknown as Worker;
 
 ctx.onmessage = (e: MessageEvent<OptimizerRequest>) => {
-  const { seq, input } = e.data;
-  runSolveSession(input, {
-    onProgress: (progress) =>
+  const { seq, input, carry } = e.data;
+  const callbacks = {
+    onProgress: (progress: number) =>
       ctx.postMessage({ seq, kind: "progress", progress } satisfies OptimizerResponse),
-    onCeilings: (ceilings) =>
+    onCeilings: (ceilings: number[]) =>
       ctx.postMessage({ seq, kind: "ceilings", ceilings } satisfies OptimizerResponse),
-    onBetter: (output) =>
+    onBetter: (output: OptimizerOutput) =>
       ctx.postMessage({ seq, kind: "better", output } satisfies OptimizerResponse),
-    onResult: (output, refining, verified) =>
+    onResult: (output: OptimizerOutput, refining: boolean, verified: boolean) =>
       ctx.postMessage({
         seq,
         kind: "result",
@@ -25,5 +29,8 @@ ctx.onmessage = (e: MessageEvent<OptimizerRequest>) => {
         refining,
         verified,
       } satisfies OptimizerResponse),
-  });
+  };
+  // Empty budget overrides (production defaults); `carry` threads the main thread's
+  // cross-edit ceiling bounds into the session's first solve (see carryover.ts).
+  runSolveSession(input, callbacks, {}, carry);
 };

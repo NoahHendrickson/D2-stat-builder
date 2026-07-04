@@ -1,5 +1,5 @@
 import { solve, solveCeilings } from "./solve";
-import type { OptimizerInput, OptimizerOutput } from "./types";
+import type { CeilingCarry, OptimizerInput, OptimizerOutput } from "./types";
 
 /**
  * Wall-clock budgets for the background phases after a capped search: ceilings
@@ -75,12 +75,19 @@ export function runSolveSession(
   input: OptimizerInput,
   cb: SessionCallbacks,
   budgets: SessionBudgets = {},
+  carry?: CeilingCarry,
 ): void {
   const first = solve(input, {
     onProgress: cb.onProgress,
     onCeilings: cb.onCeilings,
     topNBudgetMs: budgets.topNBudgetMs,
     ceilingBudgetMs: budgets.ceilingBudgetMs,
+    // Cross-edit carryover (see carryover.ts): proven bounds from the previous query when
+    // it differed only in minimums. Both are trusted seeds — a wrong value clamps a real
+    // ceiling. Only the FIRST solve needs them: phases 1–2 chain off `first.ceilings` /
+    // `first.ceilingUppers`, so the carry propagates through the whole session unchanged.
+    ceilingSeed: carry?.ceilingSeed,
+    ceilingUpperSeed: carry?.ceilingUpperSeed,
   });
   if (!first.capped && first.ceilingsExact) {
     cb.onResult(first, false, true);

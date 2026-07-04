@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
+import { computeCeilingCarry } from "./carryover";
 import { beats, runSolveSession } from "./session";
-import { solve } from "./solve";
+import { solve, solveCeilings } from "./solve";
 import type { OptimizerInput, OptimizerOutput, OptimizerPiece } from "./types";
 import { realWarlockCodaInput, realWarlockTwoSetInput } from "./real-pool.fixture";
 
@@ -275,3 +276,54 @@ test("an unverified background pass never claims exhaustion", () => {
     expect(beats(offered, interim.output)).toBe(true);
   }
 }, 60_000);
+
+// Step 4: cross-edit carryover must never change the ANSWER — only the speed. A tightened
+// edit solved WITH the carry from the prior query must land on bit-identical final
+// ceilings/uppers/loadout totals as the same edit solved COLD, and prove them in
+// fewer-or-equal probes (the carried uppers skip re-proving what the prior query settled).
+test("carryover across a tightened edit is answer-identical and no slower", () => {
+  const inputA = realWarlockCodaInput();
+  // Solve query A to a final, verified output (uncapped walk, ceilings settle in-line).
+  const { results: resultsA, cb: cbA } = collector();
+  runSolveSession(inputA, cbA, { topNBudgetMs: 60_000, ceilingBudgetMs: 30_000 });
+  const outputA = resultsA().at(-1)!.output;
+  expect(outputA.ceilingsExact).toBe(true);
+
+  // The adjust-a-slider edit: tighten grenade 120 → 130 (still feasible), nothing else.
+  const inputB: OptimizerInput = {
+    ...inputA,
+    minimums: [190, 0, 0, 130, 0, 0],
+  };
+  const carry = computeCeilingCarry(inputA, outputA, inputB);
+  // A pure-tightening edit → uppers carry, and at least one stored loadout survives so
+  // the achievable lows carry too.
+  expect(carry?.ceilingUpperSeed).toBeDefined();
+
+  const runB = (c?: typeof carry) => {
+    const { results, cb } = collector();
+    runSolveSession(inputB, cb, { topNBudgetMs: 60_000, ceilingBudgetMs: 30_000 }, c);
+    return results().at(-1)!.output;
+  };
+  const withCarry = runB(carry);
+  const cold = runB(undefined);
+
+  // Carry changes speed, never the answer: identical ceilings, uppers, exactness, totals.
+  expect(withCarry.ceilings).toEqual(cold.ceilings);
+  expect(withCarry.ceilingUppers).toEqual(cold.ceilingUppers);
+  expect(withCarry.ceilingsExact).toBe(cold.ceilingsExact);
+  expect(withCarry.loadouts.map((l) => l.total)).toEqual(
+    cold.loadouts.map((l) => l.total),
+  );
+
+  // Fewer-or-equal probes with the carry. The session doesn't expose probe stats, so
+  // compare solveCeilings directly on the same seeds the session would hand it: the
+  // carried achievable-lows seed with vs without the carried uppers.
+  const seed = carry!.ceilingSeed ?? cold.ceilings;
+  const ceilCold = solveCeilings(inputB, seed, 30_000);
+  const ceilCarry = solveCeilings(inputB, seed, 30_000, {
+    upperSeed: carry!.ceilingUpperSeed,
+  });
+  expect(ceilCarry.ceilings).toEqual(ceilCold.ceilings);
+  expect(ceilCarry.uppers).toEqual(ceilCold.uppers);
+  expect(ceilCarry.stats.probes).toBeLessThanOrEqual(ceilCold.stats.probes);
+}, 180_000);

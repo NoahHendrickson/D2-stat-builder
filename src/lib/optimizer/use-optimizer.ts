@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { computeCeilingCarry } from "./carryover";
 import type {
   OptimizerInput,
   OptimizerOutput,
@@ -42,6 +43,14 @@ export function useOptimizer() {
   // Whether a solve is in flight on the current worker. A worker is single-threaded, so a
   // message posted mid-solve would queue behind it — run() checks this to terminate first.
   const inFlightRef = useRef(false);
+  // The input of the run currently producing messages, paired with each result so lastRef
+  // can be updated with a matching (input, output). Set on every run() before postMessage.
+  const inFlightInputRef = useRef<OptimizerInput | null>(null);
+  // The most recent (input, output) pair — the source for cross-edit ceiling carryover.
+  // Updated on EVERY result message (interim and final): an interim output's uppers are
+  // proven too (Step 3), so a slider adjustment mid-refinement can still carry bounds from
+  // a killed worker's last post. cancel() leaves this intact so the next run can carry.
+  const lastRef = useRef<{ input: OptimizerInput; output: OptimizerOutput } | null>(null);
   const [result, setResult] = useState<OptimizerOutput | null>(null);
   const [ceilings, setCeilings] = useState<StatArray | null>(null);
   // Are the displayed ceilings PROVEN maxima? False while a run streams or a background
@@ -93,6 +102,15 @@ export function useOptimizer() {
             break;
           case "result":
             setCeilingsExact(msg.output.ceilingsExact);
+            // Record the latest (input, output) for cross-edit carryover. Every posted
+            // result — interim or final — carries proven uppers (Step 3), so both are
+            // valid carry sources; the last one wins.
+            if (inFlightInputRef.current) {
+              lastRef.current = {
+                input: inFlightInputRef.current,
+                output: msg.output,
+              };
+            }
             if (msg.refining) {
               // Time-capped search: its build list is final and shown now (and never
               // replaced); the worker is still refining, so stay "in flight" for
@@ -173,12 +191,20 @@ export function useOptimizer() {
         workerRef.current = null;
       }
       inFlightRef.current = true;
+      inFlightInputRef.current = input;
       setRunning(true);
       setProgress(0);
       setCeilingsExact(false); // the new query's ceilings are unproven until its result lands
       setRefinement(IDLE);
       setRunId(seq);
-      getWorker().postMessage({ seq, input } satisfies OptimizerRequest);
+      // Carry proven ceiling bounds from the previous query when this edit only changed
+      // the minimums — lets the worker skip re-proving what the last query established.
+      // computeCeilingCarry returns undefined whenever the carry wouldn't be sound.
+      const last = lastRef.current;
+      const carry = last
+        ? computeCeilingCarry(last.input, last.output, input)
+        : undefined;
+      getWorker().postMessage({ seq, input, carry } satisfies OptimizerRequest);
     },
     [getWorker, setRefinement],
   );
