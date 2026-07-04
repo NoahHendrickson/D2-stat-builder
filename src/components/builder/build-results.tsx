@@ -95,7 +95,7 @@ function ArtificeCell({
   if (pick === null) return null;
   const key = STAT_ORDER[pick];
   return (
-    <span className="flex items-center gap-0.5 text-[10px] text-sky-400/80 tabular-nums">
+    <span className="flex items-center gap-0.5 text-[10px] text-brand/80 tabular-nums">
       <StatGlyph src={statIcons[key]} label={`Artifice +3 ${STAT_LABELS[key]}`} />
       +3
     </span>
@@ -350,7 +350,7 @@ const BuildRow = memo(function BuildRow({
             label="Mods"
             render={(i) =>
               loadout.modBonus[i] ? (
-                <span className="text-sky-400/80">+{loadout.modBonus[i]}</span>
+                <span className="text-brand/80">+{loadout.modBonus[i]}</span>
               ) : (
                 ""
               )
@@ -361,7 +361,7 @@ const BuildRow = memo(function BuildRow({
               label="Artifice"
               render={(i) =>
                 loadout.artificeBonus[i] ? (
-                  <span className="text-sky-400/80">
+                  <span className="text-brand/80">
                     +{loadout.artificeBonus[i]}
                   </span>
                 ) : (
@@ -376,7 +376,7 @@ const BuildRow = memo(function BuildRow({
               const v = loadout.tuningBonus[i];
               if (!v) return "";
               return (
-                <span className={v < 0 ? "text-red-400/80" : "text-sky-400/80"}>
+                <span className={v < 0 ? "text-red-400/80" : "text-brand/80"}>
                   {v > 0 ? `+${v}` : v}
                 </span>
               );
@@ -606,11 +606,11 @@ function SearchStatus({
       // visual weight than a status line.
       return (
         <div
-          className="flex items-center gap-2.5 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2.5"
+          className="flex items-center gap-2.5 rounded-lg border border-brand/30 bg-brand/10 px-3 py-2.5"
           aria-live="polite"
         >
           <CircleNotch
-            className="size-4 shrink-0 animate-spin text-sky-600 dark:text-sky-500"
+            className="size-4 shrink-0 animate-spin text-primary"
             aria-hidden
           />
           <p className="text-foreground/90 text-sm">

@@ -115,7 +115,7 @@ export function FragmentPicker({
                       key={key}
                       className={cn(
                         "text-center text-xs tabular-nums",
-                        f.stats[i] > 0 && "text-sky-400",
+                        f.stats[i] > 0 && "text-brand",
                         f.stats[i] < 0 && "text-red-400",
                       )}
                     >

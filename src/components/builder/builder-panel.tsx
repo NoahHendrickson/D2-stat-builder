@@ -650,9 +650,10 @@ export function BuilderPanel({
                   // unknown (before the first search). Every wording derived from the
                   // proven/unproven distinction lives in this ONE object so the visible
                   // text, tick label, and accessible names can't drift apart: an exact
-                  // ceiling is a hard "/ max"; an unproven one is a lower bound ("≥",
-                  // "81+" — achievable, but possibly more out there, e.g. while a
-                  // refinement is still probing or its budget expired).
+                  // ceiling is a hard "/ max"; an unproven one is a lower bound ("81+"
+                  // — achievable, but possibly more out there, e.g. while a refinement
+                  // is still probing or its budget expired). Both render "/ n" inline;
+                  // only the tick label and accessible wording mark the difference.
                   const cap = ceilings ? ceilings[i] : null;
                   const ceilingValue = cap ?? undefined;
                   const capText =
@@ -666,7 +667,7 @@ export function BuilderPanel({
                             tickAria: `Set ${STAT_LABELS[key]} to its max (${cap})`,
                           }
                         : {
-                            separator: "≥",
+                            separator: "/",
                             srText: `${STAT_LABELS[key]} achievable: at least ${cap}`,
                             tickLabel: `${cap}+`,
                             tickAria: `Set ${STAT_LABELS[key]} to its highest proven value (${cap})`,
