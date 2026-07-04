@@ -193,7 +193,9 @@ input[type="number"] {
 /* Loading-screen exotics: the outer wrapper drifts across the viewport while
    the inner image bobs and tilts, so the two motions compose independently.
    Tiles start parked offscreen left; negative animation delays scatter them
-   mid-flight on first paint (and reduced motion simply leaves them hidden). */
+   mid-flight on first paint. Reduced motion pauses both animations instead of
+   hiding the tiles: paused-at-negative-delay keeps that first-paint scatter,
+   so the sky stays decorated but motionless. */
 .loading-tile-drift {
   animation: loading-drift var(--drift-duration) linear var(--drift-delay)
     infinite var(--drift-direction, normal);
@@ -201,4 +203,10 @@ input[type="number"] {
 .loading-tile-bob {
   animation: loading-bob var(--bob-duration) ease-in-out var(--drift-delay)
     infinite alternate;
+}
+@media (prefers-reduced-motion: reduce) {
+  .loading-tile-drift,
+  .loading-tile-bob {
+    animation-play-state: paused;
+  }
 }

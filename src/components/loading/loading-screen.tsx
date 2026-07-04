@@ -153,8 +153,8 @@ export function LoadingScreenView({
         fading && "pointer-events-none opacity-0",
       )}
     >
-      {/* Drifting exotics. Purely decorative; reduced motion leaves them parked offscreen. */}
-      <div aria-hidden className="absolute inset-0 motion-reduce:hidden">
+      {/* Drifting exotics. Purely decorative; reduced motion pauses them in place. */}
+      <div aria-hidden className="absolute inset-0">
         {TILES.map((tile, i) => (
           <div
             key={i}
