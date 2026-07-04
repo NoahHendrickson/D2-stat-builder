@@ -5,6 +5,7 @@ import Image from "next/image";
 import {
   ArrowSquareOut,
   CaretDown,
+  CheckCircle,
   CircleNotch,
   Copy,
 } from "@phosphor-icons/react";
@@ -600,16 +601,35 @@ function SearchStatus({
     case "idle":
       return cappedBanner;
     case "running":
+      // Alert-style card sized like a build row (same rounded border footprint) — the
+      // background search materially changes what the sliders offer, so it earns more
+      // visual weight than a status line.
       return (
-        <p className="text-foreground/85 flex items-center gap-1.5 text-xs" aria-live="polite">
-          <CircleNotch className="animate-spin" aria-hidden />
-          {refinement.interim.capped
-            ? "First pass done — searching deeper for higher maximums and stronger builds ("
-            : // Uncapped walk, unproven ceilings: the list is final and only the stat
+        <div
+          className="flex items-center gap-2.5 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2.5"
+          aria-live="polite"
+        >
+          <CircleNotch
+            className="size-4 shrink-0 animate-spin text-sky-600 dark:text-sky-500"
+            aria-hidden
+          />
+          <p className="text-foreground/90 text-sm">
+            {refinement.interim.capped ? (
+              <>
+                <span className="font-medium">First pass done</span> — searching
+                deeper for higher maximums and stronger builds (
+              </>
+            ) : (
+              // Uncapped walk, unproven ceilings: the list is final and only the stat
               // maximums are still being proven — don't promise a build search.
-              "Builds are final — proving higher stat maximums ("}
-          {Math.round(refinement.progress * 100)}%)
-        </p>
+              <>
+                <span className="font-medium">Builds are final</span> — proving
+                higher stat maximums (
+              </>
+            )}
+            {Math.round(refinement.progress * 100)}%)
+          </p>
+        </div>
       );
     case "done": {
       const { outcome, pending, verified } = refinement;
@@ -633,14 +653,25 @@ function SearchStatus({
         );
       }
       if (outcome === "improved") {
+        // The running card resolves into this — same alert footprint, green with a
+        // check instead of the spinner, so completion reads as the card finishing
+        // rather than the status vanishing.
         lines.push(
-          <p
+          <div
             key="improved"
-            className="text-xs text-emerald-600/90 dark:text-emerald-500/90"
+            className="flex items-center gap-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2.5"
             aria-live="polite"
           >
-            Higher stat maximums found — raise a stat target to explore them.
-          </p>,
+            <CheckCircle
+              weight="fill"
+              className="size-4 shrink-0 text-emerald-600 dark:text-emerald-500"
+              aria-hidden
+            />
+            <p className="text-foreground/90 text-sm">
+              <span className="font-medium">Higher stat maximums found</span> —
+              raise a stat target to explore them.
+            </p>
+          </div>,
         );
       } else if (outcome === "confirmed" && !pending) {
         // Only rendered when both halves are PROVEN (walk exhausted + ceilings exact).

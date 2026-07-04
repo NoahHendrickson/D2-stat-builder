@@ -94,36 +94,37 @@ export function NewDropsFeed({ rows }: { rows: Row[] }) {
 
   return (
     <aside
-      className="hidden w-56 shrink-0 flex-col gap-2 xl:flex"
+      className="hidden w-56 shrink-0 flex-col xl:flex"
       aria-label="New drops"
     >
-      <div className="flex h-8 shrink-0 items-center justify-between gap-2 px-1">
-        <h2 className="text-sm font-medium">
-          New drops
-          {hasEntries && (
-            <span className="text-muted-foreground ml-1.5 text-xs tabular-nums">
-              {entries.length}
-            </span>
+      <div className="border-border/50 flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
+        <div className="border-border/50 flex shrink-0 items-center justify-between gap-2 border-b px-2 py-1.5">
+          <h2 className="text-sm font-medium">
+            New drops
+            {hasEntries && (
+              <span className="text-muted-foreground ml-1.5 text-xs tabular-nums">
+                {entries.length}
+              </span>
+            )}
+          </h2>
+          {hasEntries && seen && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-1.5 text-xs"
+              onClick={() => setSeenMap(acknowledgeAll(seen))}
+            >
+              Clear
+            </Button>
           )}
-        </h2>
-        {hasEntries && seen && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-1.5 text-xs"
-            onClick={() => setSeenMap(acknowledgeAll(seen))}
-          >
-            Clear
-          </Button>
-        )}
-      </div>
-      <div className="border-border/50 min-h-0 flex-1 overflow-y-auto rounded-lg border p-1">
-        {!hasEntries ? (
-          <p className="text-muted-foreground px-2 py-4 text-center text-xs">
-            New armor will appear here.
-          </p>
-        ) : (
-          entries.map(({ row, firstSeen }) => {
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-1">
+          {!hasEntries ? (
+            <p className="text-muted-foreground px-2 py-4 text-center text-xs">
+              New armor will appear here.
+            </p>
+          ) : (
+            entries.map(({ row, firstSeen }) => {
             const { piece } = row;
             const subtitle = [
               piece.archetype,
@@ -176,8 +177,9 @@ export function NewDropsFeed({ rows }: { rows: Row[] }) {
                 </button>
               </div>
             );
-          })
-        )}
+            })
+          )}
+        </div>
       </div>
     </aside>
   );
