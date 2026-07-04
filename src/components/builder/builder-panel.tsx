@@ -101,6 +101,7 @@ export function BuilderPanel({
     cancel,
     result,
     ceilings,
+    ceilingsExact,
     running,
     progress,
     runId,
@@ -646,9 +647,30 @@ export function BuilderPanel({
                   const icon = statIcons[key];
                   // Achievable ceiling for this stat given the others. Overlay it as a
                   // lighter fill up to that max (full-width at 200); omit only while
-                  // unknown (before the first search).
+                  // unknown (before the first search). Every wording derived from the
+                  // proven/unproven distinction lives in this ONE object so the visible
+                  // text, tick label, and accessible names can't drift apart: an exact
+                  // ceiling is a hard "/ max"; an unproven one is a lower bound ("≥",
+                  // "81+" — achievable, but possibly more out there, e.g. while a
+                  // refinement is still probing or its budget expired).
                   const cap = ceilings ? ceilings[i] : null;
                   const ceilingValue = cap ?? undefined;
+                  const capText =
+                    cap === null
+                      ? null
+                      : ceilingsExact
+                        ? {
+                            separator: "/",
+                            srText: `${STAT_LABELS[key]} achievable max: ${cap}`,
+                            tickLabel: "max",
+                            tickAria: `Set ${STAT_LABELS[key]} to its max (${cap})`,
+                          }
+                        : {
+                            separator: "≥",
+                            srText: `${STAT_LABELS[key]} achievable: at least ${cap}`,
+                            tickLabel: `${cap}+`,
+                            tickAria: `Set ${STAT_LABELS[key]} to its highest proven value (${cap})`,
+                          };
                   return (
                     <div
                       key={key}
@@ -698,16 +720,14 @@ export function BuilderPanel({
                           className="w-12 tabular-nums"
                           style={{ textAlign: "center" }}
                         />
-                        {cap !== null && (
+                        {capText && (
                           <>
-                            <span
-                              className="sr-only"
-                            >{`${STAT_LABELS[key]} achievable max: ${cap}`}</span>
+                            <span className="sr-only">{capText.srText}</span>
                             <span
                               className="text-muted-foreground inline-flex shrink-0 items-baseline text-xs tabular-nums"
                               aria-hidden
                             >
-                              /
+                              {capText.separator}
                               <span className="inline-block w-7 text-right">
                                 {cap}
                               </span>
@@ -717,22 +737,21 @@ export function BuilderPanel({
                       </div>
                       <div className="col-start-2 relative h-5">
                         {STAT_TARGET_TICKS.map((t) => {
-                          // Once a ceiling is predicted, the top tick reads "max" and
-                          // jumps the target to that achievable maximum instead of 200.
-                          const tickValue =
-                            t === STAT_SLIDER_MAX && cap !== null ? cap : t;
-                          const tickLabel =
-                            t === STAT_SLIDER_MAX && cap !== null
-                              ? "max"
-                              : String(t);
+                          // Once a ceiling is known, the top tick jumps the target to
+                          // that achievable value instead of 200 (labels per capText).
+                          const isCeilingTick = t === STAT_SLIDER_MAX && cap !== null;
+                          const tickValue = isCeilingTick ? cap : t;
+                          const tickLabel = isCeilingTick
+                            ? capText!.tickLabel
+                            : String(t);
                           return (
                             <button
                               key={t}
                               type="button"
                               onClick={() => setTarget(i, tickValue)}
                               aria-label={
-                                tickLabel === "max"
-                                  ? `Set ${STAT_LABELS[key]} to its max (${tickValue})`
+                                isCeilingTick
+                                  ? capText!.tickAria
                                   : `Set ${STAT_LABELS[key]} to ${t}`
                               }
                               style={{

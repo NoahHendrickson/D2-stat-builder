@@ -19,11 +19,13 @@ export interface SessionCallbacks {
   /** Ceiling updates as they refine (seed first, then per-stat improvements). */
   onCeilings: (ceilings: number[]) => void;
   /**
-   * A results post. `refining: true` means the search was time-capped: this build list
-   * is frozen for this query (the UI never changes a shown list on its own), and the
-   * background phases are still running. A final post always follows with the SAME
-   * loadouts and the refined ceilings (`refining: false`); its `verified` flag is true
-   * when the background build search ran to exhaustion.
+   * A results post. `refining: true` means background work is still running and this
+   * build list is frozen for this query (the UI never changes a shown list on its own)
+   * — either the search was time-capped (both background phases follow) or the walk
+   * completed but the ceilings are unproven (ceilings-only refinement follows). A
+   * final post always follows with the SAME loadouts and the refined ceilings
+   * (`refining: false`). `verified` is a claim about the POST's list: true when a
+   * build walk — the in-line one or the background re-run — ran it to exhaustion.
    */
   onResult: (output: OptimizerOutput, refining: boolean, verified: boolean) => void;
   /**
@@ -57,13 +59,15 @@ export function beats(next: OptimizerOutput, prev: OptimizerOutput): boolean {
 
 /**
  * The worker's search session. The solve runs on the responsive default budgets; if it
- * completes (the common case) its result is final and verified. If it was time-capped,
- * the capped result is posted immediately with a FROZEN build list, then two background
- * phases run: (1) ceilings-only refinement — higher per-stat maxima surface live as the
- * slider overlays rise; (2) an exhaustive re-run of the build search — covering the
- * blind spot where a higher-TOTAL build hides inside already-proven ceilings (balanced
- * builds move no overlay). A strictly-better phase-2 list is offered via onBetter for
- * the user to apply; the final post repeats the frozen loadouts with refined ceilings.
+ * completes with proven ceilings (the common case) its result is final and verified.
+ * Otherwise the result is posted immediately with a FROZEN build list and background
+ * work follows: (1) ceilings-only refinement — higher per-stat maxima surface live as
+ * the slider overlays rise; (2) only if the walk was time-capped, an exhaustive re-run
+ * of the build search — covering the blind spot where a higher-TOTAL build hides
+ * inside already-proven ceilings (balanced builds move no overlay). An uncapped walk
+ * whose ceilings were merely budget-starved skips phase 2 (it can't beat itself). A
+ * strictly-better phase-2 list is offered via onBetter for the user to apply; the
+ * final post repeats the frozen loadouts with refined ceilings.
  * Cancellation is the caller's problem (the main thread terminates the whole worker),
  * which is why this can be a plain synchronous function.
  */
@@ -78,13 +82,19 @@ export function runSolveSession(
     topNBudgetMs: budgets.topNBudgetMs,
     ceilingBudgetMs: budgets.ceilingBudgetMs,
   });
-  if (!first.capped) {
+  if (!first.capped && first.ceilingsExact) {
     cb.onResult(first, false, true);
     return;
   }
-  cb.onResult(first, true, false);
+  // `verified` on the interim post is a claim about the list it carries: an uncapped
+  // walk was exhaustive even though its ceilings still need background work.
+  cb.onResult(first, true, !first.capped);
 
-  // Phase 1: exact ceilings (overlays rise live; time-based progress share).
+  // Phase 1: exact ceilings (overlays rise live; time-based progress share). When the
+  // walk completed and only the ceilings were budget-starved (Noah's 81-vs-85 report:
+  // constrained pools walk fast, but joint minimums make the probes expensive), this
+  // is the ONLY background phase and covers the whole progress bar.
+  const share = first.capped ? CEILING_PROGRESS_SHARE : 1;
   const ceilingBudgetMs = budgets.refineCeilingBudgetMs ?? REFINE_CEILING_BUDGET_MS;
   const ceilingStart = performance.now();
   const phase1 = solveCeilings(
@@ -94,13 +104,23 @@ export function runSolveSession(
     cb.onCeilings,
     () =>
       cb.onProgress(
-        CEILING_PROGRESS_SHARE *
-          Math.min(1, (performance.now() - ceilingStart) / ceilingBudgetMs),
+        share * Math.min(1, (performance.now() - ceilingStart) / ceilingBudgetMs),
       ),
   );
   // Phase boundary: solveCeilings may run zero probes (everything already settled) and
   // emit nothing — pin the bar at the boundary so it never sits at 0% for the phase.
-  cb.onProgress(CEILING_PROGRESS_SHARE);
+  cb.onProgress(share);
+
+  if (!first.capped) {
+    // The walk already ran to exhaustion — no better list can exist, so skip phase 2;
+    // only the ceilings needed more time.
+    cb.onResult(
+      { ...first, ceilings: phase1.ceilings, ceilingsExact: phase1.exact },
+      false,
+      true,
+    );
+    return;
+  }
 
   // Phase 2: exhaustive build search. Its ceilings are instant (budget 0, seeded from
   // phase 1) and its heap is seeded with the frozen list, so the deterministic walk's
@@ -114,12 +134,16 @@ export function runSolveSession(
     onProgress: (p) =>
       cb.onProgress(CEILING_PROGRESS_SHARE + (1 - CEILING_PROGRESS_SHARE) * p),
   });
-  if (beats(second, first)) cb.onBetter(second);
-  // The final post keeps the FROZEN loadouts but takes the best proven ceilings from
-  // both phases: phase 2's deeper walk can prove per-stat maxima (its top-200 seeds)
-  // that phase 1's probes timed out short of. The merge preserves exactness: when
-  // phase 1 is exact, phase 2's achievable values can't exceed it.
+  // Both the offered list and the final post take the best proven ceilings from both
+  // phases: phase 2's deeper walk can prove per-stat maxima (its top-200 seeds) that
+  // phase 1's probes timed out short of. The merge preserves exactness: when phase 1
+  // is exact, phase 2's achievable values can't exceed it. Ceilings are a property of
+  // the QUERY, not the list, so the offer carries the same merged values — applying it
+  // must not regress the displayed exactness.
   const ceilings = phase1.ceilings.map((v, s) => Math.max(v, second.ceilings[s]));
+  if (beats(second, first)) {
+    cb.onBetter({ ...second, ceilings, ceilingsExact: phase1.exact });
+  }
   cb.onResult(
     { ...first, ceilings, ceilingsExact: phase1.exact },
     false,
