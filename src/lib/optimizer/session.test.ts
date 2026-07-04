@@ -61,15 +61,48 @@ test("an uncapped search posts exactly one final, verified result", () => {
   expect(better()).toHaveLength(0);
 });
 
-// Noah's real pool with weapon ≥190 / grenade ≥120 / CODA 4pc: ~490k combos, far
-// beyond a 1ms budget, so the search caps at its first clock check (~65k combos in) —
-// and, measured, the capped walk's best build (total 483) is beaten by the exhaustive
-// walk's (486). That is exactly the hidden better-TOTAL blind spot the pending offer
-// exists to cover: the better build moves no per-stat ceiling, only the sum.
 const realInput = realWarlockCodaInput;
 
+/**
+ * A pool with a DETERMINISTIC capped-walk blind spot: slot 0's first-enumerated piece
+ * (h-weapon) fronts 17^4 = 83,521 feasible fillers-only completions — more than the
+ * 65,536 leaves a 1ms budget covers before its first clock check — while the best
+ * builds hide behind the second piece (h-spread). h-weapon builds pile weapon past the
+ * 200 clamp (best total 260, measured); h-spread builds spread the same 90 points
+ * unclamped (best 339). Nothing prunes the h-weapon subtree: minimums are zero and the
+ * top-N admission bound (runningTotal + suffixTotal = 450) always beats the heap's
+ * worst (≤ 264), so the cap fires mid-subtree by construction.
+ *
+ * This used to use realWarlockCodaInput (measured capped best 483 vs true 486), but the
+ * subset-mask suffix bound tightened the walk enough that its 65,536-leaf window now
+ * covers that pool's entire top-200 — the offer path needs a blind spot no admissible
+ * per-stat/subset bound can close (only a clamp-aware TOTAL bound could, a deliberate
+ * non-goal; see the dominance note in solve.ts).
+ */
+function blindSpotInput(): OptimizerInput {
+  const p = (id: string, stats: number[]): OptimizerPiece => ({
+    id,
+    stats,
+    exotic: false,
+  });
+  const filler = (slot: string): OptimizerPiece[] =>
+    Array.from({ length: 17 }, (_, j) => p(`${slot}${j}`, [90 - j, j, 0, 0, 0, 0]));
+  return {
+    slots: [
+      [p("h-weapon", [90, 0, 0, 0, 0, 0]), p("h-spread", [15, 15, 15, 15, 15, 15])],
+      filler("a"),
+      filler("c"),
+      filler("l"),
+      filler("k"),
+    ],
+    minimums: [0, 0, 0, 0, 0, 0],
+    mods: { major: 0, minor: 0 },
+    allowTuning: false,
+  };
+}
+
 test("a capped search freezes its list, refines ceilings, and offers a better list", () => {
-  const input = realInput();
+  const input = blindSpotInput();
   const { events, results, better, cb } = collector();
   runSolveSession(input, cb, {
     topNBudgetMs: 1,
@@ -104,8 +137,9 @@ test("a capped search freezes its list, refines ceilings, and offers a better li
   expect(reference.capped).toBe(false);
   expect(final.output.ceilings).toEqual(reference.ceilings);
 
-  // The 1ms window covered ~65k of ~490k combos and (measured) its best build totals
-  // 483 vs the true 486, so the exhaustive pass must offer a rank-wise better list.
+  // The 1ms window covered 65,536 of 167,042 leaves — all inside the h-weapon subtree
+  // (best total 260) — so the exhaustive pass, which finds the h-spread builds (best
+  // 339), must offer a rank-wise better list.
   expect(better()).toHaveLength(1);
   const offered = better()[0].output;
   expect(offered.capped).toBe(false);

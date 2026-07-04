@@ -34,6 +34,32 @@
  * The CODA scenario finds every final value within 1200ms but still can't PROVE them
  * inside the budget (6 timed-out probes) — exactness proofs, not discovery, are the
  * bottleneck in both.
+ *
+ * After Step 1 (subset-mask bound) — captured 2026-07-03, same machine, single run:
+ *
+ * Scenario: realWarlockTwoSetInput (180/0/0/105/0/0, exotic require, two 2pc sets)
+ *   seed:            [180, 38, 85, 125, 110, 71]
+ *   time to exact:   9216 ms
+ *   stats:           { probes: 37, feasible: 19, disproven: 18, timedOut: 0, nodes: 63326456 }
+ *   exact ceilings:  [200, 55, 115, 145, 125, 105]   (identical to baseline — no drift)
+ *   at 1200ms:       ceilings [200, 55, 109, 144, 123, 84], exact=false,
+ *                    stats { probes: 36, feasible: 14, disproven: 8, timedOut: 14, nodes: 8408068 }
+ *
+ * Scenario: realWarlockCodaInput (190/0/0/120/0/0, CODA 4pc, mods 3/2, frag [0,0,10,-20,0,0])
+ *   seed:            [190, 41, 96, 120, 71, 71]
+ *   time to exact:   116 ms
+ *   stats:           { probes: 38, feasible: 16, disproven: 22, timedOut: 0, nodes: 743733 }
+ *   exact ceilings:  [200, 60, 120, 130, 95, 95]   (identical to baseline — no drift)
+ *   at 1200ms:       ceilings [200, 60, 120, 130, 95, 95], exact=TRUE at 114ms —
+ *                    the production inline budget now PROVES this scenario,
+ *                    stats { probes: 38, feasible: 16, disproven: 22, timedOut: 0, nodes: 743733 }
+ *
+ * Step 1 takeaway: CODA collapsed 1442ms/9.66M nodes → 116ms/744k (~12x) and is now
+ * exact INSIDE the inline budget. Two-set improved 22.1s/143M → 9.2s/63M (~2.4x) —
+ * real but not a collapse: its remaining cost sits in probes whose infeasibility isn't
+ * a two-stat conservation argument (the mask fires at the root or not at all there),
+ * which is what witness harvest / bound carryover (Steps 2–3) target. Exact ceilings
+ * are bit-identical to baseline in both scenarios, as an admissible tightening must be.
  */
 import { test } from "vitest";
 import { solve, solveCeilings } from "./solve";

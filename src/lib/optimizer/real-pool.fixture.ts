@@ -63,11 +63,13 @@ export function realWarlockTwoSetInput(): OptimizerInput {
   };
 }
 
-// Noah's real pool with weapon ≥190 / grenade ≥120 / CODA 4pc: ~490k combos, far beyond
-// a 1ms budget, so the search caps at its first clock check (~65k combos in) — and,
-// measured, the capped walk's best build (total 483) is beaten by the exhaustive walk's
-// (486). That is exactly the hidden better-TOTAL blind spot the pending offer exists to
-// cover: the better build moves no per-stat ceiling, only the sum.
+// Noah's real pool with weapon ≥190 / grenade ≥120 / CODA 4pc. Historical note: before
+// the subset-mask suffix bound (2026-07-03) this walk reached ~490k leaves, so a 1ms
+// budget capped it ~65k in with its best build (total 483) beaten by the exhaustive
+// walk's (486) — the hidden better-TOTAL blind spot the pending offer covers. The
+// tighter bound cut the exhaustive walk to ~157k leaves and the capped window now finds
+// the full top-200 here, so the offer-path test builds a synthetic blind-spot pool
+// instead (see session.test.ts).
 export function realWarlockCodaInput(): OptimizerInput {
   return {
     slots: realWarlockSlots(),
