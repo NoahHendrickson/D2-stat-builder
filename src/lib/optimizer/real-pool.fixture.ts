@@ -5,7 +5,7 @@
  * targets and a CODA 4pc requirement, the health ceiling probe alone exceeds the whole
  * refinement budget on a pool this size, which starved every stat scheduled after it.
  */
-import type { OptimizerPiece } from "./types";
+import type { OptimizerInput, OptimizerPiece } from "./types";
 
 export interface FixturePiece {
   slot: "helmet" | "arms" | "chest" | "legs" | "classItem";
@@ -31,6 +31,55 @@ export function realWarlockSlots(): OptimizerPiece[][] {
       tuning: { tuned: p.tuned, offStats: p.off },
     })),
   );
+}
+
+// Noah's 81-vs-85 report (2026-07-03): a heavily constrained query (specific exotic +
+// two 2pc sets) finishes the build walk well inside its budget, but the joint weapon/
+// grenade minimums make the ceiling probes expensive enough to blow THEIR budget — an
+// uncapped solve with ceilingsExact=false.
+export function realWarlockTwoSetInput(): OptimizerInput {
+  // Simulate a specific exotic (only one exotic in the pool, on legs).
+  let kept = false;
+  const slots = realWarlockSlots().map((slot, i) =>
+    slot.filter((p) => {
+      if (!p.exotic) return true;
+      if (i === 3 && !kept) {
+        kept = true;
+        return true;
+      }
+      return false;
+    }),
+  );
+  return {
+    slots,
+    minimums: [180, 0, 0, 105, 0, 0],
+    mods: { major: 0, minor: 5 },
+    exotic: { mode: "require" },
+    setRequirements: [
+      { setHash: 1490136267, count: 2 },
+      { setHash: 3734029045, count: 2 },
+    ],
+    allowTuning: true,
+  };
+}
+
+// Noah's real pool with weapon ≥190 / grenade ≥120 / CODA 4pc. Historical note: before
+// the subset-mask suffix bound (2026-07-03) this walk reached ~490k leaves, so a 1ms
+// budget capped it ~65k in with its best build (total 483) beaten by the exhaustive
+// walk's (486) — the hidden better-TOTAL blind spot the pending offer covers. The
+// tighter bound cut the exhaustive walk to ~157k leaves and the capped window now finds
+// the full top-200 here, so the offer-path test builds a synthetic blind-spot pool
+// instead (see session.test.ts).
+export function realWarlockCodaInput(): OptimizerInput {
+  return {
+    slots: realWarlockSlots(),
+    minimums: [190, 0, 0, 120, 0, 0],
+    mods: { major: 3, minor: 2 },
+    setRequirements: [{ setHash: 1490136267, count: 4 }],
+    exotic: { mode: "any" },
+    allowTuning: true,
+    fragmentBonus: [0, 0, 10, -20, 0, 0],
+  };
 }
 
 export const REAL_WARLOCK_POOL: FixturePiece[] = [

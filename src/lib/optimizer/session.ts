@@ -1,5 +1,6 @@
-import { solve, solveCeilings } from "./solve";
-import type { OptimizerInput, OptimizerOutput } from "./types";
+import { solve } from "./solve";
+import { solveCeilings } from "./ceilings";
+import type { CeilingCarry, OptimizerInput, OptimizerOutput } from "./types";
 
 /**
  * Wall-clock budgets for the background phases after a capped search: ceilings
@@ -75,12 +76,19 @@ export function runSolveSession(
   input: OptimizerInput,
   cb: SessionCallbacks,
   budgets: SessionBudgets = {},
+  carry?: CeilingCarry,
 ): void {
   const first = solve(input, {
     onProgress: cb.onProgress,
     onCeilings: cb.onCeilings,
     topNBudgetMs: budgets.topNBudgetMs,
     ceilingBudgetMs: budgets.ceilingBudgetMs,
+    // Cross-edit carryover (see carryover.ts): proven bounds from the previous query when
+    // it differed only in minimums. Both are trusted seeds — a wrong value clamps a real
+    // ceiling. Only the FIRST solve needs them: phases 1–2 chain off `first.ceilings` /
+    // `first.ceilingUppers`, so the carry propagates through the whole session unchanged.
+    ceilingSeed: carry?.ceilingSeed,
+    ceilingUpperSeed: carry?.ceilingUpperSeed,
   });
   if (!first.capped && first.ceilingsExact) {
     cb.onResult(first, false, true);
@@ -97,16 +105,16 @@ export function runSolveSession(
   const share = first.capped ? CEILING_PROGRESS_SHARE : 1;
   const ceilingBudgetMs = budgets.refineCeilingBudgetMs ?? REFINE_CEILING_BUDGET_MS;
   const ceilingStart = performance.now();
-  const phase1 = solveCeilings(
-    input,
-    first.ceilings,
-    ceilingBudgetMs,
-    cb.onCeilings,
-    () =>
+  const phase1 = solveCeilings(input, first.ceilings, ceilingBudgetMs, {
+    // The inline pass's proven uppers seed phase 1's upper side, so it doesn't re-prove
+    // the infeasibility shrinks the 1.2s inline pass already certified.
+    upperSeed: first.ceilingUppers,
+    onCeilings: cb.onCeilings,
+    onProbe: () =>
       cb.onProgress(
         share * Math.min(1, (performance.now() - ceilingStart) / ceilingBudgetMs),
       ),
-  );
+  });
   // Phase boundary: solveCeilings may run zero probes (everything already settled) and
   // emit nothing — pin the bar at the boundary so it never sits at 0% for the phase.
   cb.onProgress(share);
@@ -115,7 +123,12 @@ export function runSolveSession(
     // The walk already ran to exhaustion — no better list can exist, so skip phase 2;
     // only the ceilings needed more time.
     cb.onResult(
-      { ...first, ceilings: phase1.ceilings, ceilingsExact: phase1.exact },
+      {
+        ...first,
+        ceilings: phase1.ceilings,
+        ceilingUppers: phase1.uppers,
+        ceilingsExact: phase1.exact,
+      },
       false,
       true,
     );
@@ -136,16 +149,22 @@ export function runSolveSession(
   });
   // Both the offered list and the final post take the best proven ceilings from both
   // phases: phase 2's deeper walk can prove per-stat maxima (its top-200 seeds) that
-  // phase 1's probes timed out short of. The merge preserves exactness: when phase 1
-  // is exact, phase 2's achievable values can't exceed it. Ceilings are a property of
-  // the QUERY, not the list, so the offer carries the same merged values — applying it
-  // must not regress the displayed exactness.
+  // phase 1's probes timed out short of. The max-merge applies to `ceilings` ONLY — the
+  // proven uppers come from phase 1 (a same-input exhaustive walk's achievables can't
+  // exceed a proven upper: achievable ≤ true max ≤ upper), so phase 2 can only raise the
+  // achievable low side toward that upper, never past it. Ceilings are a property of the
+  // QUERY, not the list, so the offer carries the same merged values.
   const ceilings = phase1.ceilings.map((v, s) => Math.max(v, second.ceilings[s]));
+  const ceilingUppers = phase1.uppers;
+  // Derive exactness from the ACTUAL posted pair, not phase1's flag: phase 2 can close a
+  // stat phase 1 left short by proving an achievable that meets the proven upper. Honest
+  // and strictly more accurate — the equality invariant on the posted pair always holds.
+  const ceilingsExact = ceilings.every((v, s) => v === ceilingUppers[s]);
   if (beats(second, first)) {
-    cb.onBetter({ ...second, ceilings, ceilingsExact: phase1.exact });
+    cb.onBetter({ ...second, ceilings, ceilingUppers, ceilingsExact });
   }
   cb.onResult(
-    { ...first, ceilings, ceilingsExact: phase1.exact },
+    { ...first, ceilings, ceilingUppers, ceilingsExact },
     false,
     !second.capped,
   );

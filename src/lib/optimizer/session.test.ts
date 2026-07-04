@@ -1,13 +1,28 @@
 import { expect, test } from "vitest";
+import { computeCeilingCarry } from "./carryover";
 import { beats, runSolveSession } from "./session";
 import { solve } from "./solve";
+import { solveCeilings } from "./ceilings";
 import type { OptimizerInput, OptimizerOutput, OptimizerPiece } from "./types";
-import { realWarlockSlots } from "./real-pool.fixture";
+import { realWarlockCodaInput, realWarlockTwoSetInput } from "./real-pool.fixture";
 
 type SessionEvent =
   | { type: "progress"; value: number }
   | { type: "better"; output: OptimizerOutput }
   | { type: "result"; output: OptimizerOutput; refining: boolean; verified: boolean };
+
+/**
+ * Every posted result must carry proven per-stat uppers that dominate its ceilings, and
+ * its exactness flag must equal the elementwise ceilings===uppers equality.
+ */
+function assertUpperInvariants(out: OptimizerOutput) {
+  let allEqual = true;
+  for (let s = 0; s < 6; s++) {
+    expect(out.ceilings[s]).toBeLessThanOrEqual(out.ceilingUppers[s]);
+    if (out.ceilings[s] !== out.ceilingUppers[s]) allEqual = false;
+  }
+  expect(out.ceilingsExact).toBe(allEqual);
+}
 
 function collector() {
   const events: SessionEvent[] = [];
@@ -61,23 +76,48 @@ test("an uncapped search posts exactly one final, verified result", () => {
   expect(better()).toHaveLength(0);
 });
 
-// Noah's real pool with weapon ≥190 / grenade ≥120 / CODA 4pc: ~490k combos, far
-// beyond a 1ms budget, so the search caps at its first clock check (~65k combos in) —
-// and, measured, the capped walk's best build (total 483) is beaten by the exhaustive
-// walk's (486). That is exactly the hidden better-TOTAL blind spot the pending offer
-// exists to cover: the better build moves no per-stat ceiling, only the sum.
-const realInput = (): OptimizerInput => ({
-  slots: realWarlockSlots(),
-  minimums: [190, 0, 0, 120, 0, 0],
-  mods: { major: 3, minor: 2 },
-  setRequirements: [{ setHash: 1490136267, count: 4 }],
-  exotic: { mode: "any" },
-  allowTuning: true,
-  fragmentBonus: [0, 0, 10, -20, 0, 0],
-});
+const realInput = realWarlockCodaInput;
+
+/**
+ * A pool with a DETERMINISTIC capped-walk blind spot: slot 0's first-enumerated piece
+ * (h-weapon) fronts 17^4 = 83,521 feasible fillers-only completions — more than the
+ * 65,536 leaves a 1ms budget covers before its first clock check — while the best
+ * builds hide behind the second piece (h-spread). h-weapon builds pile weapon past the
+ * 200 clamp (best total 260, measured); h-spread builds spread the same 90 points
+ * unclamped (best 339). Nothing prunes the h-weapon subtree: minimums are zero and the
+ * top-N admission bound (runningTotal + suffixTotal = 450) always beats the heap's
+ * worst (≤ 264), so the cap fires mid-subtree by construction.
+ *
+ * This used to use realWarlockCodaInput (measured capped best 483 vs true 486), but the
+ * subset-mask suffix bound tightened the walk enough that its 65,536-leaf window now
+ * covers that pool's entire top-200 — the offer path needs a blind spot no admissible
+ * per-stat/subset bound can close (only a clamp-aware TOTAL bound could, a deliberate
+ * non-goal; see the dominance note in solve.ts).
+ */
+function blindSpotInput(): OptimizerInput {
+  const p = (id: string, stats: number[]): OptimizerPiece => ({
+    id,
+    stats,
+    exotic: false,
+  });
+  const filler = (slot: string): OptimizerPiece[] =>
+    Array.from({ length: 17 }, (_, j) => p(`${slot}${j}`, [90 - j, j, 0, 0, 0, 0]));
+  return {
+    slots: [
+      [p("h-weapon", [90, 0, 0, 0, 0, 0]), p("h-spread", [15, 15, 15, 15, 15, 15])],
+      filler("a"),
+      filler("c"),
+      filler("l"),
+      filler("k"),
+    ],
+    minimums: [0, 0, 0, 0, 0, 0],
+    mods: { major: 0, minor: 0 },
+    allowTuning: false,
+  };
+}
 
 test("a capped search freezes its list, refines ceilings, and offers a better list", () => {
-  const input = realInput();
+  const input = blindSpotInput();
   const { events, results, better, cb } = collector();
   runSolveSession(input, cb, {
     topNBudgetMs: 1,
@@ -100,6 +140,9 @@ test("a capped search freezes its list, refines ceilings, and offers a better li
   // With a 30s budget the refinement settles every stat — the final post must carry
   // the proven-exact flag (the "Verified" claim in the UI hangs off it).
   expect(final.output.ceilingsExact).toBe(true);
+  // Every posted result carries proven uppers ≥ its ceilings; exact ⇔ they're equal.
+  assertUpperInvariants(interim.output);
+  assertUpperInvariants(final.output);
 
   // Ceilings only ever rise across the refinement…
   for (let s = 0; s < 6; s++) {
@@ -112,10 +155,12 @@ test("a capped search freezes its list, refines ceilings, and offers a better li
   expect(reference.capped).toBe(false);
   expect(final.output.ceilings).toEqual(reference.ceilings);
 
-  // The 1ms window covered ~65k of ~490k combos and (measured) its best build totals
-  // 483 vs the true 486, so the exhaustive pass must offer a rank-wise better list.
+  // The 1ms window covered 65,536 of 167,042 leaves — all inside the h-weapon subtree
+  // (best total 260) — so the exhaustive pass, which finds the h-spread builds (best
+  // 339), must offer a rank-wise better list.
   expect(better()).toHaveLength(1);
   const offered = better()[0].output;
+  assertUpperInvariants(offered);
   expect(offered.capped).toBe(false);
   expect(offered.loadouts.length).toBeGreaterThanOrEqual(
     interim.output.loadouts.length,
@@ -158,34 +203,8 @@ test("a capped search freezes its list, refines ceilings, and offers a better li
 // grenade minimums make the ceiling probes expensive enough to blow THEIR budget — an
 // uncapped solve with ceilingsExact=false. The session used to end right there, freezing
 // unproven lower bounds as the displayed maxima.
-const uncappedInexactInput = (): OptimizerInput => {
-  // Simulate a specific exotic (only one exotic in the pool, on legs).
-  let kept = false;
-  const slots = realWarlockSlots().map((slot, i) =>
-    slot.filter((p) => {
-      if (!p.exotic) return true;
-      if (i === 3 && !kept) {
-        kept = true;
-        return true;
-      }
-      return false;
-    }),
-  );
-  return {
-    slots,
-    minimums: [180, 0, 0, 105, 0, 0],
-    mods: { major: 0, minor: 5 },
-    exotic: { mode: "require" },
-    setRequirements: [
-      { setHash: 1490136267, count: 2 },
-      { setHash: 3734029045, count: 2 },
-    ],
-    allowTuning: true,
-  };
-};
-
 test("an uncapped search with inexact ceilings refines them in the background", () => {
-  const input = uncappedInexactInput();
+  const input = realWarlockTwoSetInput();
   const { results, better, cb } = collector();
   runSolveSession(input, cb, {
     topNBudgetMs: 60_000, // the walk completes uncapped
@@ -220,7 +239,7 @@ test("an uncapped search with inexact ceilings refines them in the background", 
 }, 180_000);
 
 test("a ceilings-only refinement that also times out stays honest", () => {
-  const input = uncappedInexactInput();
+  const input = realWarlockTwoSetInput();
   const { results, better, cb } = collector();
   runSolveSession(input, cb, {
     topNBudgetMs: 60_000,
@@ -232,6 +251,10 @@ test("a ceilings-only refinement that also times out stays honest", () => {
   expect(final.verified).toBe(true); // the WALK was exhaustive…
   expect(final.output.ceilingsExact).toBe(false); // …but the ceilings stay unproven
   expect(final.output.loadouts).toEqual(interim.output.loadouts);
+  // Both posts stay honest: proven uppers dominate their ceilings, and the unproven
+  // exactness is consistent with the ceilings/uppers pair (some stat still short).
+  assertUpperInvariants(interim.output);
+  assertUpperInvariants(final.output);
   expect(better()).toHaveLength(0);
 }, 60_000);
 
@@ -254,3 +277,54 @@ test("an unverified background pass never claims exhaustion", () => {
     expect(beats(offered, interim.output)).toBe(true);
   }
 }, 60_000);
+
+// Step 4: cross-edit carryover must never change the ANSWER — only the speed. A tightened
+// edit solved WITH the carry from the prior query must land on bit-identical final
+// ceilings/uppers/loadout totals as the same edit solved COLD, and prove them in
+// fewer-or-equal probes (the carried uppers skip re-proving what the prior query settled).
+test("carryover across a tightened edit is answer-identical and no slower", () => {
+  const inputA = realWarlockCodaInput();
+  // Solve query A to a final, verified output (uncapped walk, ceilings settle in-line).
+  const { results: resultsA, cb: cbA } = collector();
+  runSolveSession(inputA, cbA, { topNBudgetMs: 60_000, ceilingBudgetMs: 30_000 });
+  const outputA = resultsA().at(-1)!.output;
+  expect(outputA.ceilingsExact).toBe(true);
+
+  // The adjust-a-slider edit: tighten grenade 120 → 130 (still feasible), nothing else.
+  const inputB: OptimizerInput = {
+    ...inputA,
+    minimums: [190, 0, 0, 130, 0, 0],
+  };
+  const carry = computeCeilingCarry(inputA, outputA, inputB);
+  // A pure-tightening edit → uppers carry, and at least one stored loadout survives so
+  // the achievable lows carry too.
+  expect(carry?.ceilingUpperSeed).toBeDefined();
+
+  const runB = (c?: typeof carry) => {
+    const { results, cb } = collector();
+    runSolveSession(inputB, cb, { topNBudgetMs: 60_000, ceilingBudgetMs: 30_000 }, c);
+    return results().at(-1)!.output;
+  };
+  const withCarry = runB(carry);
+  const cold = runB(undefined);
+
+  // Carry changes speed, never the answer: identical ceilings, uppers, exactness, totals.
+  expect(withCarry.ceilings).toEqual(cold.ceilings);
+  expect(withCarry.ceilingUppers).toEqual(cold.ceilingUppers);
+  expect(withCarry.ceilingsExact).toBe(cold.ceilingsExact);
+  expect(withCarry.loadouts.map((l) => l.total)).toEqual(
+    cold.loadouts.map((l) => l.total),
+  );
+
+  // Fewer-or-equal probes with the carry. The session doesn't expose probe stats, so
+  // compare solveCeilings directly on the same seeds the session would hand it: the
+  // carried achievable-lows seed with vs without the carried uppers.
+  const seed = carry!.ceilingSeed ?? cold.ceilings;
+  const ceilCold = solveCeilings(inputB, seed, 30_000);
+  const ceilCarry = solveCeilings(inputB, seed, 30_000, {
+    upperSeed: carry!.ceilingUpperSeed,
+  });
+  expect(ceilCarry.ceilings).toEqual(ceilCold.ceilings);
+  expect(ceilCarry.uppers).toEqual(ceilCold.uppers);
+  expect(ceilCarry.stats.probes).toBeLessThanOrEqual(ceilCold.stats.probes);
+}, 180_000);

@@ -1,7 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { solve } from "./solve";
+import { solveCeilings } from "./ceilings";
 import type { OptimizerInput, OptimizerPiece } from "./types";
-import { realWarlockSlots } from "./real-pool.fixture";
+import { realWarlockSlots, realWarlockTwoSetInput } from "./real-pool.fixture";
 
 /** A tuning-free, set-free piece — stats sum straight into the loadout total. */
 function piece(id: string, stats: number[]): OptimizerPiece {
@@ -259,6 +260,164 @@ describe("ceiling refinement", () => {
     );
     expect(out.ceilings[3]).toBeGreaterThanOrEqual(135); // grenade
   }, 30_000);
+
+  test("solveCeilings reports probe stats consistent with its own counting", () => {
+    // A tiny pool: one probe per stat that needs refining, all trivially feasible.
+    const slots = [
+      [piece("h", [30, 0, 0, 0, 0, 0])],
+      [piece("a", [0, 20, 0, 0, 0, 0])],
+      [piece("c", [0, 0, 10, 0, 0, 0])],
+      [piece("l", [0, 0, 0, 40, 0, 0])],
+      [piece("ci", [0, 0, 0, 0, 15, 0])],
+    ];
+    const seed = [0, 0, 0, 0, 0, 0];
+    const { stats } = solveCeilings(
+      { slots, minimums: [0, 0, 0, 0, 0, 0], mods: { major: 0, minor: 0 }, allowTuning: false },
+      seed,
+      1000,
+    );
+    expect(stats.probes).toBeGreaterThan(0);
+    expect(stats.feasible + stats.disproven + stats.timedOut).toBe(stats.probes);
+    expect(stats.nodes).toBeGreaterThan(0);
+  });
+
+  test("witness harvest settles a coupled stat with no probe of its own", () => {
+    // The only meaningful choice is slot 0: piece W carries weapons AND super together, so
+    // any build reaching weapons necessarily maxes super; piece H carries health instead.
+    // Slots 1–4 are inert. This makes weapons/super perfectly coupled: the weapons probe's
+    // witness (the W build) already proves super's ceiling, so harvest settles super with
+    // zero super probes.
+    const slots = [
+      [piece("W", [100, 0, 0, 0, 100, 0]), piece("H", [0, 100, 0, 0, 0, 0])],
+      [piece("f1", [0, 0, 0, 0, 0, 0])],
+      [piece("f2", [0, 0, 0, 0, 0, 0])],
+      [piece("f3", [0, 0, 0, 0, 0, 0])],
+      [piece("f4", [0, 0, 0, 0, 0, 0])],
+    ];
+    const query = {
+      slots,
+      minimums: [0, 0, 0, 0, 0, 0],
+      mods: { major: 0, minor: 0 },
+      allowTuning: false,
+    };
+    const { ceilings, stats } = solveCeilings(query, [0, 0, 0, 0, 0, 0], 5000);
+
+    // Brute-verifiable: W build → weapons 100 & super 100; H build → health 100.
+    expect(ceilings).toEqual([100, 100, 0, 0, 100, 0]);
+
+    // Without harvest each of the three pending stats (weapons, health, super) would run
+    // its own binary search over the window [0,100] = 7 probes each = 21 total. With
+    // harvest, the weapons probe's witness (W build: weapons 100, super 100) raises BOTH
+    // ceilings to their optimistic bound on the very first probe, so weapons settles after
+    // 1 probe, super never probes at all, and only health needs its own probe: 2 total.
+    expect(stats.probes).toBe(2);
+    // The coupled stat (super, index 4) contributed no probe — proof the harvest, not a
+    // binary search, settled it.
+    expect(stats.feasible).toBe(2);
+    expect(stats.disproven).toBe(0);
+    expect(stats.timedOut).toBe(0);
+  });
+});
+
+describe("ceiling upper-bound provenance", () => {
+  // Invariant across pools and budgets: the returned ceilings never exceed their PROVEN
+  // upper bounds, and exactness is exactly the elementwise-equality of the two.
+  test("ceilings <= ceilingUppers ∀s and ceilingsExact ⇔ elementwise equal", () => {
+    const easyOut = solve(
+      input([
+        [piece("h", [30, 0, 0, 0, 0, 0])],
+        [piece("a", [0, 20, 0, 0, 0, 0])],
+        [piece("c", [0, 0, 10, 0, 0, 0])],
+        [piece("l", [0, 0, 0, 40, 0, 0])],
+        [piece("ci", [0, 0, 0, 0, 15, 0])],
+      ]),
+    );
+    const hardInput: OptimizerInput = {
+      slots: realWarlockSlots(),
+      minimums: [190, 0, 0, 120, 0, 0],
+      mods: { major: 3, minor: 2 },
+      setRequirements: [{ setHash: 1490136267, count: 4 }],
+      allowTuning: true,
+      fragmentBonus: [0, 0, 10, -20, 0, 0],
+    };
+    const checkOut = (out: {
+      ceilings: number[];
+      ceilingUppers: number[];
+      ceilingsExact: boolean;
+    }) => {
+      let allEqual = true;
+      for (let s = 0; s < 6; s++) {
+        expect(out.ceilings[s]).toBeLessThanOrEqual(out.ceilingUppers[s]);
+        if (out.ceilings[s] !== out.ceilingUppers[s]) allEqual = false;
+      }
+      expect(out.ceilingsExact).toBe(allEqual);
+    };
+    checkOut(easyOut);
+    // Generous budget (should converge exact) and a tiny budget (forces timeouts) — the
+    // invariant must hold either way.
+    checkOut(solve(hardInput, { topNBudgetMs: 60_000, ceilingBudgetMs: 30_000 }));
+    checkOut(solve(hardInput, { topNBudgetMs: 500, ceilingBudgetMs: 1 }));
+  }, 120_000);
+
+  // Provenance honesty: on a hard pool with a tiny budget (forces probe timeouts), the
+  // uppers must remain a HONEST proven bound — never below a value later proven achievable
+  // by a generous exact reference run. An unproven timeout-shrink leaking into `uppers`
+  // would drop it below the reference ceiling and fail this.
+  test("timeout-starved uppers never fall below a proven-achievable reference", () => {
+    const input = realWarlockTwoSetInput();
+    const first = solve(input, { ceilingBudgetMs: 0 });
+    const cheap = solveCeilings(input, first.ceilings, 50);
+    const reference = solveCeilings(input, first.ceilings, 120_000);
+    expect(cheap.exact).toBe(false); // 50ms can't prove this pool
+    expect(reference.exact).toBe(true);
+    for (let s = 0; s < 6; s++) {
+      expect(cheap.uppers[s]).toBeGreaterThanOrEqual(reference.ceilings[s]);
+      // And the reference proved exactly (ceilings === uppers everywhere).
+      expect(reference.ceilings[s]).toBe(reference.uppers[s]);
+    }
+  }, 180_000);
+
+  // Degenerate empty-pool path (a slot with no candidate pieces): NOTHING is proven about
+  // the maxima, so uppers must be the trivial-but-proven STAT_CAP (200) per stat — never the
+  // seed, which would falsely present the seed AS the proven maximum. `exact` stays false and
+  // the ceilings ≤ uppers invariant holds strictly wherever seed < cap.
+  test("empty-pool return is self-consistent: uppers = 200, exact false, ceilings ≤ uppers", () => {
+    const emptyPool: OptimizerInput = {
+      slots: [
+        [piece("h", [30, 0, 0, 0, 0, 0])],
+        [piece("a", [0, 20, 0, 0, 0, 0])],
+        [], // no candidates for this slot → degenerate pool
+        [piece("l", [0, 0, 0, 40, 0, 0])],
+        [piece("ci", [0, 0, 0, 0, 15, 0])],
+      ],
+      minimums: [0, 0, 0, 0, 0, 0],
+    };
+    const seed = [30, 20, 10, 40, 15, 0];
+    const out = solveCeilings(emptyPool, seed, 1000);
+    expect(out.exact).toBe(false);
+    expect(out.uppers).toEqual([200, 200, 200, 200, 200, 200]);
+    expect(out.ceilings).toEqual(seed);
+    for (let s = 0; s < 6; s++) {
+      expect(out.ceilings[s]).toBeLessThanOrEqual(out.uppers[s]);
+    }
+  });
+
+  // upperSeed narrows the windows: re-running seeded with a prior exact run's uppers (and
+  // its ceilings) must reproduce the same result with no MORE probes (windows start
+  // already closed, so many stats settle with zero probes).
+  test("upperSeed narrows windows: identical result, no more probes", () => {
+    const input = realWarlockTwoSetInput();
+    const first = solve(input, { ceilingBudgetMs: 0 });
+    const run1 = solveCeilings(input, first.ceilings, 120_000);
+    expect(run1.exact).toBe(true);
+    const run2 = solveCeilings(input, run1.ceilings, 120_000, {
+      upperSeed: run1.uppers,
+    });
+    expect(run2.ceilings).toEqual(run1.ceilings);
+    expect(run2.uppers).toEqual(run1.uppers);
+    expect(run2.exact).toBe(true);
+    expect(run2.stats.probes).toBeLessThanOrEqual(run1.stats.probes);
+  }, 180_000);
 });
 
 describe("exotic tuning", () => {

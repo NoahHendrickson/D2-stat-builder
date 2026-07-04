@@ -12,13 +12,12 @@ import type {
 } from "./types";
 // Relative import: this module runs in the worker AND in vitest, which has no "@/" alias.
 import { ARTIFICE_MOD_BONUS } from "../armory/stats";
+// The stat constants + clamp live in the leaf floors.ts so main-thread code can reach them
+// without dragging the tuner into its bundle. Re-export here so existing `./tuning` importers
+// keep working.
+import { NUM_STATS, NUM_SLOTS, STAT_CAP, clamp } from "./floors";
 
-export const NUM_STATS = 6;
-export const NUM_SLOTS = 5;
-export const STAT_CAP = 200;
-
-export const clamp = (v: number): number =>
-  v < 0 ? 0 : v > STAT_CAP ? STAT_CAP : v;
+export { NUM_STATS, NUM_SLOTS, STAT_CAP, clamp };
 
 /** One tuning choice for a piece: its per-stat delta and what to record if picked. */
 export interface TuneOption {
