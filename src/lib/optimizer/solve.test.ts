@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { solve, solveCeilings } from "./solve";
+import { solve } from "./solve";
+import { solveCeilings } from "./ceilings";
 import type { OptimizerInput, OptimizerPiece } from "./types";
 import { realWarlockSlots, realWarlockTwoSetInput } from "./real-pool.fixture";
 

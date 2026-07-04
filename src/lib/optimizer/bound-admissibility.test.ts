@@ -10,7 +10,8 @@
  * failure after a bound change indicts the change, not the harness.
  */
 import { describe, expect, test } from "vitest";
-import { computeSuffixBounds, makeJointMinCheck, solveCeilings } from "./solve";
+import { computeSuffixBounds, makeJointMinCheck } from "./bounds";
+import { solveCeilings } from "./ceilings";
 import {
   NUM_SLOTS,
   NUM_STATS,

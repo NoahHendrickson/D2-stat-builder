@@ -168,7 +168,8 @@
 import { test } from "vitest";
 import { computeCeilingCarry } from "./carryover";
 import { runSolveSession } from "./session";
-import { CEILING_BUDGET_MS, solve, solveCeilings } from "./solve";
+import { solve } from "./solve";
+import { CEILING_BUDGET_MS, solveCeilings } from "./ceilings";
 import { realWarlockCodaInput, realWarlockTwoSetInput } from "./real-pool.fixture";
 import type { OptimizerInput, OptimizerOutput } from "./types";
 

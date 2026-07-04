@@ -1,4 +1,5 @@
-import { solve, solveCeilings } from "./solve";
+import { solve } from "./solve";
+import { solveCeilings } from "./ceilings";
 import type { CeilingCarry, OptimizerInput, OptimizerOutput } from "./types";
 
 /**

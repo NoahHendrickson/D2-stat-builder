@@ -1,7 +1,8 @@
 import { expect, test } from "vitest";
 import { computeCeilingCarry } from "./carryover";
 import { beats, runSolveSession } from "./session";
-import { solve, solveCeilings } from "./solve";
+import { solve } from "./solve";
+import { solveCeilings } from "./ceilings";
 import type { OptimizerInput, OptimizerOutput, OptimizerPiece } from "./types";
 import { realWarlockCodaInput, realWarlockTwoSetInput } from "./real-pool.fixture";
 
