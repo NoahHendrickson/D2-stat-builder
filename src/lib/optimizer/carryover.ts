@@ -1,16 +1,62 @@
-import { raiseAchievableFloors } from "./solve";
-import { NUM_STATS } from "./tuning";
+// Import from the leaf floors.ts (not ./solve or ./tuning): keeps the whole solver + tuner
+// out of the main-thread bundle that pulls in carryover.ts (see use-optimizer.ts).
+import { NUM_STATS, raiseAchievableFloors } from "./floors";
 import type {
   CeilingCarry,
   ExoticConstraint,
   ModBudget,
   OptimizerInput,
-  OptimizerOutput,
   OptimizerPiece,
+  OptimizerOutput,
+  PieceTuning,
   SetRequirement,
 } from "./types";
 
 export type { CeilingCarry };
+
+/**
+ * Compile-time exhaustiveness pins for every type the same-query comparator walks
+ * field-by-field. Each `satisfies Record<keyof T, true>` fails to compile the moment a
+ * field is added to `T` without being listed here, forcing whoever adds it to decide how it
+ * affects query identity. Without these, a new field on any nested type would compile clean,
+ * compare "equal", and let the carry silently reuse ceilings from a genuinely different
+ * query — corrupting the reported per-stat maxima. The top-level `OptimizerInput` witness is
+ * `HANDLED_INPUT_KEYS` below; these cover the nested types it recurses into.
+ */
+const HANDLED_PIECE_KEYS = {
+  id: true,
+  stats: true,
+  exotic: true,
+  hash: true,
+  setHash: true,
+  tuning: true,
+  artifice: true,
+} satisfies Record<keyof OptimizerPiece, true>;
+void HANDLED_PIECE_KEYS;
+
+const HANDLED_TUNING_KEYS = {
+  tuned: true,
+  offStats: true,
+} satisfies Record<keyof PieceTuning, true>;
+void HANDLED_TUNING_KEYS;
+
+const HANDLED_EXOTIC_KEYS = {
+  mode: true,
+  hashes: true,
+} satisfies Record<keyof ExoticConstraint, true>;
+void HANDLED_EXOTIC_KEYS;
+
+const HANDLED_SET_REQ_KEYS = {
+  setHash: true,
+  count: true,
+} satisfies Record<keyof SetRequirement, true>;
+void HANDLED_SET_REQ_KEYS;
+
+const HANDLED_MOD_BUDGET_KEYS = {
+  major: true,
+  minor: true,
+} satisfies Record<keyof ModBudget, true>;
+void HANDLED_MOD_BUDGET_KEYS;
 
 /** Default the solver applies to `mods` (see solve.ts). */
 function normMods(mods: ModBudget | undefined): ModBudget {
@@ -226,6 +272,16 @@ export function computeCeilingCarry(
   nextInput: OptimizerInput,
 ): CeilingCarry | undefined {
   if (!sameQueryExceptMinimums(prevInput, nextInput)) return undefined;
+
+  // classifyMinimums (and the tightened re-derivation) index [0..NUM_STATS) blindly; a short
+  // array reads `undefined`, every comparison is false, and it degrades to "equal" — which
+  // carries BOTH seeds off a malformed query. Carry nothing on doubt.
+  if (
+    prevInput.minimums.length !== NUM_STATS ||
+    nextInput.minimums.length !== NUM_STATS
+  ) {
+    return undefined;
+  }
 
   const dir = classifyMinimums(prevInput.minimums, nextInput.minimums);
 

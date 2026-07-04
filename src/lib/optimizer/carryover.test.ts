@@ -268,6 +268,16 @@ describe("computeCeilingCarry", () => {
     expect(computeCeilingCarry(prevInput, prevOutput, next)).toBeUndefined();
   });
 
+  test("malformed minimums (wrong length) → undefined (carry nothing on doubt)", () => {
+    // A short minimums array would read undefined past its end and degrade to "equal",
+    // wrongly carrying both seeds. The length guard must reject it outright — on either side.
+    const shortPrev = baseInput({ minimums: [10, 10, 0] });
+    const shortNext = baseInput({ minimums: [10, 10, 0] });
+    const okInput = baseInput({ minimums: [10, 10, 0, 0, 0, 0] });
+    expect(computeCeilingCarry(shortPrev, prevOutput, okInput)).toBeUndefined();
+    expect(computeCeilingCarry(okInput, prevOutput, shortNext)).toBeUndefined();
+  });
+
   test("EQUAL minimums → carries both seeds", () => {
     const next = baseInput({ minimums: [10, 10, 0, 0, 0, 0] });
     const carry = computeCeilingCarry(prevInput, prevOutput, next);

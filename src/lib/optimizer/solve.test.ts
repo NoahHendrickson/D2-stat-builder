@@ -376,6 +376,31 @@ describe("ceiling upper-bound provenance", () => {
     }
   }, 180_000);
 
+  // Degenerate empty-pool path (a slot with no candidate pieces): NOTHING is proven about
+  // the maxima, so uppers must be the trivial-but-proven STAT_CAP (200) per stat — never the
+  // seed, which would falsely present the seed AS the proven maximum. `exact` stays false and
+  // the ceilings ≤ uppers invariant holds strictly wherever seed < cap.
+  test("empty-pool return is self-consistent: uppers = 200, exact false, ceilings ≤ uppers", () => {
+    const emptyPool: OptimizerInput = {
+      slots: [
+        [piece("h", [30, 0, 0, 0, 0, 0])],
+        [piece("a", [0, 20, 0, 0, 0, 0])],
+        [], // no candidates for this slot → degenerate pool
+        [piece("l", [0, 0, 0, 40, 0, 0])],
+        [piece("ci", [0, 0, 0, 0, 15, 0])],
+      ],
+      minimums: [0, 0, 0, 0, 0, 0],
+    };
+    const seed = [30, 20, 10, 40, 15, 0];
+    const out = solveCeilings(emptyPool, seed, 1000);
+    expect(out.exact).toBe(false);
+    expect(out.uppers).toEqual([200, 200, 200, 200, 200, 200]);
+    expect(out.ceilings).toEqual(seed);
+    for (let s = 0; s < 6; s++) {
+      expect(out.ceilings[s]).toBeLessThanOrEqual(out.uppers[s]);
+    }
+  });
+
   // upperSeed narrows the windows: re-running seeded with a prior exact run's uppers (and
   // its ceilings) must reproduce the same result with no MORE probes (windows start
   // already closed, so many stats settle with zero probes).

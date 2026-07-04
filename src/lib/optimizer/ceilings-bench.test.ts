@@ -168,15 +168,14 @@
 import { test } from "vitest";
 import { computeCeilingCarry } from "./carryover";
 import { runSolveSession } from "./session";
-import { solve, solveCeilings } from "./solve";
+import { CEILING_BUDGET_MS, solve, solveCeilings } from "./solve";
 import { realWarlockCodaInput, realWarlockTwoSetInput } from "./real-pool.fixture";
 import type { OptimizerInput, OptimizerOutput } from "./types";
 
 const bench = process.env.BENCH ? test : test.skip;
 
-/** Production's inline ceiling budget (see CEILING_BUDGET_MS in solve.ts) — kept in
- * sync manually since it's not exported; used to report what settles in-line. */
-const INLINE_BUDGET_MS = 1200;
+/** Production's inline ceiling budget, imported from solve.ts so it can't drift. */
+const INLINE_BUDGET_MS = CEILING_BUDGET_MS;
 const EXACT_BUDGET_MS = 120_000;
 
 function runScenario(name: string, input: OptimizerInput) {

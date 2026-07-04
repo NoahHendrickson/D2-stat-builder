@@ -6,11 +6,8 @@ import type {
   OptimizerPiece,
   SetRequirement,
 } from "./types";
+import { NUM_SLOTS, NUM_STATS, STAT_CAP, clamp, raiseAchievableFloors } from "./floors";
 import {
-  NUM_SLOTS,
-  NUM_STATS,
-  STAT_CAP,
-  clamp,
   createTuningSearcher,
   deficitPoints,
   makeInternalPiece,
@@ -25,7 +22,7 @@ const DEFAULT_MAX_RESULTS = 200;
  * be very expensive on large, tightly-constrained pools — there the refinement stops at
  * the budget and reports the best guaranteed-achievable value found so far.
  */
-const CEILING_BUDGET_MS = 1200;
+export const CEILING_BUDGET_MS = 1200;
 /**
  * Wall-clock budget for the top-N build search. Demanding *joint* stat targets can push
  * the combinatorial search into a performance cliff (minutes); past this budget it stops
@@ -43,39 +40,6 @@ const TOPN_PROGRESS_SHARE = 0.9;
 const PROGRESS_INTERVAL_MS = 100;
 /** Number of stat-subset masks for the subset-sum suffix bound (2^NUM_STATS). */
 const NUM_MASKS = 1 << NUM_STATS;
-
-/**
- * Raise each of `floors` to what a single real build proves is achievable for that stat:
- * the build's final `stats[s]` PLUS its spare mod capacity (every mod point not consumed
- * by the build) dumped into that ONE stat, clamped to STAT_CAP. Mutates `floors` in place;
- * returns whether any floor rose.
- *
- * Why every raised value is achievable: the build already meets the query's minimums, and
- * mods are only auto-assigned to cover deficits — so its unspent capacity could genuinely
- * be re-socketed into any single stat while the other five keep their achieved values
- * (still ≥ their minimums). This is the shared primitive behind both the top-N seed dump
- * and the ceiling witness harvest. (Feasible-mode witnesses don't dump leftover artifice
- * +3s, so a harvested value can slightly UNDER-state the true max — it stays a valid lower
- * bound, never an over-report.)
- */
-export function raiseAchievableFloors(
-  floors: number[],
-  stats: number[],
-  modsUsed: { major: number; minor: number },
-  mods: ModBudget,
-): boolean {
-  const spare =
-    (mods.major - modsUsed.major) * 10 + (mods.minor - modsUsed.minor) * 5;
-  let rose = false;
-  for (let s = 0; s < NUM_STATS; s++) {
-    const v = clamp(stats[s] + spare);
-    if (v > floors[s]) {
-      floors[s] = v;
-      rose = true;
-    }
-  }
-  return rose;
-}
 
 /**
  * Collapse pieces with an identical stat vector (+ exotic, + set, + tuning) to one
@@ -707,10 +671,15 @@ export function solveCeilings(
 ): { ceilings: number[]; uppers: number[]; exact: boolean; stats: CeilingStats } {
   const slots = buildSlots(input);
   if (slots.length !== NUM_SLOTS || slots.some((s) => s.length === 0)) {
-    // Degenerate return keeps the ceilings ≤ uppers invariant (uppers = ceilings here).
+    // Degenerate pool (empty slot / wrong slot count): the seed values are the only
+    // achievable lows we can trust, but NOTHING has been proven about the true maxima here,
+    // so the honest upper bound is the trivial-but-always-proven STAT_CAP per stat. That
+    // keeps ceilings ≤ uppers with strict inequality where seed < cap, so `exact: false` is
+    // self-consistent with the documented equality ⇔ exact invariant (returning uppers = seed
+    // would falsely imply the seed had been proven as the maximum).
     return {
       ceilings: seed.slice(0, NUM_STATS),
-      uppers: seed.slice(0, NUM_STATS),
+      uppers: new Array(NUM_STATS).fill(STAT_CAP),
       exact: false,
       stats: EMPTY_CEILING_STATS,
     };

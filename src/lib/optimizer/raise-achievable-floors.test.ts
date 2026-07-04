@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { raiseAchievableFloors } from "./solve";
+import { raiseAchievableFloors } from "./floors";
 
 // `raiseAchievableFloors(floors, stats, modsUsed, mods)` raises each of `floors` to the
 // build's final `stats[s]` PLUS the build's spare mod capacity dumped into that one stat,
