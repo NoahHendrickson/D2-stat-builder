@@ -60,6 +60,7 @@ function sampleSelections(): PersistedSelections {
     pinnedSets: [123456, 555],
     setFilters: { ...DEFAULT_SET_FILTERS, hideZero: false },
     exoticName: "Gyrfalcon's Hauberk",
+    exoticPerks: [null, null],
     allowTuning: true,
     legacyExotics: false,
     activeSubclass: "Void",
@@ -86,6 +87,13 @@ test("load returns null on a schema version mismatch", () => {
 test("load returns null on corrupt JSON", () => {
   localStorage.setItem(SELECTIONS_KEY, "{not valid json");
   expect(loadSelections()).toBeNull();
+});
+
+test("load defaults exoticPerks to Any/Any for data stored before the field existed", () => {
+  const old: Partial<PersistedSelections> = sampleSelections();
+  delete old.exoticPerks;
+  localStorage.setItem(SELECTIONS_KEY, JSON.stringify(old));
+  expect(loadSelections()).toEqual({ ...old, exoticPerks: [null, null] });
 });
 
 test("load defaults pinnedSets to [] for data stored before the field existed", () => {

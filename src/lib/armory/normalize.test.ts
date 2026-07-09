@@ -380,6 +380,62 @@ test("the archetype plug's name is captured; pieces without one get undefined", 
   expect(normalizeArmory(legacy, manifest)[0].archetype).toBeUndefined();
 });
 
+test("exotic class items capture Spirit perk hashes from sockets 10/11", () => {
+  const ITEM = 2273643087; // Solipsism
+  const LEFT = 1476923953; // Inmost Light
+  const RIGHT = 183430246; // Swarm
+  const cur = {
+    [H.weapons]: 5,
+    [H.health]: 5,
+    [H.class]: 5,
+    [H.grenade]: 20,
+    [H.super]: 30,
+    [H.melee]: 25,
+  };
+  const defs: Record<number, object> = {
+    [ITEM]: {
+      itemType: 2,
+      classType: 2,
+      displayProperties: { name: "Solipsism" },
+      inventory: { bucketTypeHash: 1585787867, tierType: 6 }, // classItem, exotic
+    },
+  };
+  const manifest = {
+    def: (_table: string, hash: number | null | undefined) =>
+      hash == null ? undefined : defs[hash],
+  } as unknown as Manifest;
+
+  // Pad sockets 0–9 empty, then left/right Spirits at 10/11.
+  const sockets = Array.from({ length: 12 }, (_, i) => {
+    if (i === 10) return { plugHash: LEFT };
+    if (i === 11) return { plugHash: RIGHT };
+    return {};
+  });
+
+  const profile = {
+    itemComponents: {
+      stats: {
+        data: {
+          c1: {
+            stats: Object.fromEntries(
+              Object.entries(cur).map(([h, v]) => [h, { value: v }]),
+            ),
+          },
+        },
+      },
+      sockets: { data: { c1: { sockets } } },
+    },
+    profileInventory: {
+      data: { items: [{ itemInstanceId: "c1", itemHash: ITEM }] },
+    },
+  } as unknown as DestinyProfileResponse;
+
+  const piece = normalizeArmory(profile, manifest)[0];
+  expect(piece.isExotic).toBe(true);
+  expect(piece.slot).toBe("classItem");
+  expect(piece.exoticPerkHashes).toEqual([LEFT, RIGHT]);
+});
+
 test("a directional tune (with a −5) is reversed in full on the stats it names", () => {
   // Current reflects a +5 weapons / −5 health directional over base [25, 10, 5, 20, 25, 5].
   const cur = {

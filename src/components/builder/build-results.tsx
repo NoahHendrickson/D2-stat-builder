@@ -14,6 +14,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { ArmorPiece } from "@/lib/armory/normalize";
 import type { ArmorSetInfo } from "@/lib/armory/sets";
 import type { ArmoryCharacter } from "@/lib/armory/fetch";
+import { isSyntheticClassItemId } from "@/lib/armory/exotic-class-perks";
 import {
   CLASS_NAMES,
   STAT_DISPLAY_ORDER,
@@ -444,15 +445,20 @@ function BuildActions({
 
   const resolved = pieces.filter((p): p is ArmorPiece => p !== undefined);
   const complete = resolved.length === loadout.pieceIds.length;
+  const hasSynthetic = resolved.some((p) => isSyntheticClassItemId(p.instanceId));
   const buildClass = resolved[0]?.classType;
   const targetCharacter = lastPlayedCharacter(characters, buildClass);
 
-  const missingTitle = complete
-    ? undefined
-    : "Refresh your gear — a piece in this build is missing";
+  const missingTitle = !complete
+    ? "Refresh your gear — a piece in this build is missing"
+    : hasSynthetic
+      ? "Theoretical exotic class item roll — equip / DIM need a real instance"
+      : undefined;
+
+  const canActOnItems = complete && !hasSynthetic;
 
   const openInDim = () => {
-    if (!complete || !statModHashes || !tuningPlugHashes || !artificeModHashes)
+    if (!canActOnItems || !statModHashes || !tuningPlugHashes || !artificeModHashes)
       return;
     const url = buildDimLoadoutUrl(
       buildDimLoadout({
@@ -483,7 +489,7 @@ function BuildActions({
   };
 
   const copyItemIds = async () => {
-    if (!complete) return;
+    if (!canActOnItems) return;
     const query = resolved.map((p) => `id:'${p.instanceId}'`).join(" OR ");
     try {
       await navigator.clipboard.writeText(query);
@@ -494,7 +500,7 @@ function BuildActions({
   };
 
   const equip = async () => {
-    if (!complete || !targetCharacter || equipping) return;
+    if (!canActOnItems || !targetCharacter || equipping) return;
     setEquipping(true);
     try {
       const results = await postEquipRequest(
@@ -535,7 +541,7 @@ function BuildActions({
         size="sm"
         variant="outline"
         onClick={copyItemIds}
-        disabled={!complete}
+        disabled={!canActOnItems}
         title={missingTitle}
       >
         <Copy weight="duotone" aria-hidden />
@@ -545,7 +551,7 @@ function BuildActions({
         size="sm"
         variant="outline"
         onClick={equip}
-        disabled={!complete || !targetCharacter || equipping}
+        disabled={!canActOnItems || !targetCharacter || equipping}
         title={
           missingTitle ??
           (targetCharacter
@@ -562,7 +568,10 @@ function BuildActions({
         size="sm"
         onClick={openInDim}
         disabled={
-          !complete || !statModHashes || !tuningPlugHashes || !artificeModHashes
+          !canActOnItems ||
+          !statModHashes ||
+          !tuningPlugHashes ||
+          !artificeModHashes
         }
         title={missingTitle}
       >
