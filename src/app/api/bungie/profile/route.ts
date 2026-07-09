@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { getProfile, type DestinyComponentType } from "bungie-api-ts/destiny2";
 import { BungieHttpError, createBungieHttp } from "@/lib/bungie/http";
+import {
+  BUNGIE_SUCCESS,
+  logBungiePlatformError,
+  profileErrorMessage,
+  shouldClearSessionOnBungieError,
+} from "@/lib/bungie/platform-response";
 import { clearSession, getValidAccessToken, readUser } from "@/lib/bungie/session";
 
 export const dynamic = "force-dynamic";
@@ -31,6 +37,37 @@ export async function GET() {
       membershipType: user.destinyMembershipType,
       components: COMPONENTS,
     });
+
+    if (res.ErrorCode !== BUNGIE_SUCCESS) {
+      logBungiePlatformError("GET /api/bungie/profile", res, {
+        destinyMembershipId: user.destinyMembershipId,
+        membershipType: user.destinyMembershipType,
+      });
+      if (shouldClearSessionOnBungieError(res.ErrorCode)) {
+        await clearSession();
+        return NextResponse.json(
+          { error: profileErrorMessage(res) },
+          { status: 401 },
+        );
+      }
+      return NextResponse.json(
+        { error: profileErrorMessage(res) },
+        { status: 502 },
+      );
+    }
+
+    if (res.Response == null) {
+      logBungiePlatformError("GET /api/bungie/profile", res, {
+        destinyMembershipId: user.destinyMembershipId,
+        membershipType: user.destinyMembershipType,
+        note: "ErrorCode was Success but Response was empty",
+      });
+      return NextResponse.json(
+        { error: "Bungie returned an empty Destiny profile" },
+        { status: 502 },
+      );
+    }
+
     return NextResponse.json(res.Response);
   } catch (err) {
     // A Bungie 401 means the token looks locally valid but Bungie rejects it — clear the
