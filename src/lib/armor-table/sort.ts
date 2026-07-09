@@ -1,6 +1,6 @@
 // Armor-table sorting: column key → comparable value, with missing values
 // ("—") always last regardless of direction. Sort state is an ordered nest
-// chain — compare walks levels until a tie breaks.
+// chain of direction or custom-order levels — compare walks until a tie breaks.
 //
 // Runtime imports are relative (not `@/`) — the vitest runner has no `@/` alias,
 // matching the convention in filters.ts / search.ts.
@@ -8,15 +8,13 @@ import {
   CLASS_NAMES,
   STAT_LABELS,
   STAT_ORDER,
-  type ArmorSlot,
   type StatKey,
 } from "../armory/stats";
-import type { ArmorLocation } from "../armory/normalize";
 import {
   isCustomOrderColumn,
+  sortLevelAsc,
   type ColumnKey,
   type CustomOrderColumn,
-  type CustomOrders,
   type SortKey,
   type SortLevel,
   type SortState,
@@ -39,6 +37,12 @@ export function preferredAsc(key: SortKey): boolean {
 /** Sort-menu tab ids: alphabetical/numeric direction, or custom value order. */
 export type SortMode = "asc" | "desc" | "custom";
 
+/** Result of applying a sort action — one atomic chain write (+ optional undo). */
+export interface SortActionResult {
+  sort: SortState;
+  discardedChain?: SortState;
+}
+
 /** Index of `key` in the nest chain, or -1 when absent. */
 export function sortIndexOf(sort: SortState, key: SortKey): number {
   return sort.findIndex((level) => level.key === key);
@@ -54,57 +58,84 @@ export function sortLevelFor(
 
 /**
  * Which menu tab is active for `key`, or `null` when that column is not in the
- * chain. A stored custom order wins over asc/desc for that level.
+ * chain. Custom levels are self-describing (no parallel orders map).
  */
 export function activeSortMode(
   sort: SortState,
   key: SortKey,
-  customOrders?: CustomOrders,
 ): SortMode | null {
   const level = sortLevelFor(sort, key);
   if (!level) return null;
-  if (isCustomOrderColumn(key) && customOrders?.[key] !== undefined) {
-    return "custom";
-  }
+  if (level.kind === "custom") return "custom";
   return level.asc ? "asc" : "desc";
+}
+
+function buildLevel(
+  key: SortKey,
+  mode: SortMode,
+  order: string[] | undefined,
+): SortLevel | null {
+  if (mode === "custom") {
+    if (!isCustomOrderColumn(key)) return null;
+    return { key, kind: "custom", order: order ?? [] };
+  }
+  return { key, kind: "dir", asc: mode === "asc" };
 }
 
 /**
  * Apply a sort mode for `key`: replace the chain, append as a nest, or update
- * an existing level in place. `nest` is ignored when the column is already in
- * the chain or the chain is empty.
+ * an existing level in place. Replacing a non-empty chain snapshots it for undo.
  */
-export function applySortLevel(
+export function applySortAction(
   sort: SortState,
   key: SortKey,
   mode: SortMode,
   nest: boolean,
-): SortState {
-  const asc = mode !== "desc";
-  const level: SortLevel = { key, asc };
+  order?: string[],
+): SortActionResult {
+  const level = buildLevel(key, mode, order);
+  if (!level) return { sort };
+
   const index = sortIndexOf(sort, key);
   if (index !== -1) {
     const next = [...sort];
     next[index] = level;
-    return next;
+    return { sort: next };
   }
-  if (nest && sort.length > 0) return [...sort, level];
-  return [level];
+  if (nest && sort.length > 0) {
+    return { sort: [...sort, level] };
+  }
+  return {
+    sort: [level],
+    discardedChain: sort.length > 0 ? sort : undefined,
+  };
 }
 
-/** Remove one column from the nest chain (later levels keep their order). */
-export function removeSortLevel(sort: SortState, key: SortKey): SortState {
-  return sort.filter((level) => level.key !== key);
+/** Remove one column from the nest chain; snapshots the prior chain for undo. */
+export function clearSortLevel(
+  sort: SortState,
+  key: SortKey,
+): SortActionResult {
+  if (sortIndexOf(sort, key) === -1) return { sort };
+  return {
+    sort: sort.filter((level) => level.key !== key),
+    discardedChain: sort,
+  };
 }
 
-/** Drop a column's custom order entry (no-op when already absent). */
-export function clearCustomOrder(
-  orders: CustomOrders,
-  col: CustomOrderColumn,
-): CustomOrders {
-  if (orders[col] === undefined) return orders;
-  const next = { ...orders };
-  delete next[col];
+/** Reorder values inside a custom level (no-op if that level isn't custom). */
+export function reorderCustomLevel(
+  sort: SortState,
+  key: CustomOrderColumn,
+  from: number,
+  to: number,
+): SortState {
+  const index = sortIndexOf(sort, key);
+  if (index === -1) return sort;
+  const level = sort[index];
+  if (level.kind !== "custom") return sort;
+  const next = [...sort];
+  next[index] = { ...level, order: moveOrderItem(level.order, from, to) };
   return next;
 }
 
@@ -129,12 +160,6 @@ export function moveOrderItem(
   return next;
 }
 
-export const LOCATION_LABELS: Record<ArmorLocation, string> = {
-  equipped: "Equipped",
-  inventory: "Inventory",
-  vault: "Vault",
-};
-
 /** Display label for a STAT_ORDER index. */
 export const statLabel = (index: number) => STAT_LABELS[STAT_ORDER[index]];
 
@@ -143,8 +168,6 @@ export interface SortableRow {
   piece: {
     name: string;
     classType: number;
-    slot: ArmorSlot;
-    location: ArmorLocation;
     stats: readonly number[];
     archetype?: string;
     tunedStat?: number;
@@ -214,7 +237,6 @@ function compareOneLevel(
   a: SortableRow,
   b: SortableRow,
   level: SortLevel,
-  customOrders?: CustomOrders,
 ): number {
   const va = sortValue(a, level.key);
   const vb = sortValue(b, level.key);
@@ -222,15 +244,13 @@ function compareOneLevel(
   if (va === undefined && vb === undefined) return 0;
   if (va === undefined) return 1;
   if (vb === undefined) return -1;
-  const order = isCustomOrderColumn(level.key)
-    ? customOrders?.[level.key]
-    : undefined;
+  const order = level.kind === "custom" ? level.order : undefined;
   const cmp = order
     ? compareWithCustomOrder(String(va), String(vb), order)
     : typeof va === "number" && typeof vb === "number"
       ? va - vb
       : String(va).localeCompare(String(vb));
-  return level.asc ? cmp : -cmp;
+  return sortLevelAsc(level) ? cmp : -cmp;
 }
 
 /** Walk the nest chain until a level breaks the tie. */
@@ -238,10 +258,9 @@ export function compareRows(
   a: SortableRow,
   b: SortableRow,
   sort: SortState,
-  customOrders?: CustomOrders,
 ): number {
   for (const level of sort) {
-    const cmp = compareOneLevel(a, b, level, customOrders);
+    const cmp = compareOneLevel(a, b, level);
     if (cmp !== 0) return cmp;
   }
   return 0;

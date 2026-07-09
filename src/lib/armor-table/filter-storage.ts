@@ -7,9 +7,10 @@ import {
   CUSTOM_ORDER_COLUMNS,
   DEFAULT_SORT,
   emptyFilters,
+  isCustomOrderColumn,
   isSortKey,
   type ArmorVersion,
-  type CustomOrders,
+  type CustomOrderColumn,
   type SortKey,
   type SortLevel,
   type SortState,
@@ -18,16 +19,18 @@ import {
 } from "./filters";
 
 export const TABLE_STATE_KEY = "stat-builder:armor-table";
-/** v3: sort is an ordered nest chain (array). v2 single-object sorts migrate in. */
-export const TABLE_SCHEMA_VERSION = 3;
-const LEGACY_SCHEMA_VERSION = 2;
+/**
+ * v4: each nest level is a discriminated union (`dir` | `custom` with order).
+ * v3: `{ key, asc }[]` + parallel `customOrders` map — merged on load.
+ * v2: single `{ key, asc }` or null — wrapped into a one-element chain.
+ */
+export const TABLE_SCHEMA_VERSION = 4;
+const LEGACY_SCHEMA_VERSIONS = new Set([2, 3]);
 
 export interface PersistedTableState {
   version: number;
   filters: TableFilters;
   sort: SortState;
-  /** Per-column custom value orders (empty object = all defaults). */
-  customOrders: CustomOrders;
 }
 
 function storage(): Storage | undefined {
@@ -52,44 +55,12 @@ const armorVersions = (v: unknown): ArmorVersion[] =>
 
 const REMOVED_SORT_KEYS = new Set(["slot", "location"]);
 
-function parseSortLevel(s: unknown): SortLevel | null {
-  if (typeof s !== "object" || s === null) return null;
-  const o = s as Record<string, unknown>;
-  if (!isSortKey(o.key) || typeof o.asc !== "boolean") return null;
-  if (REMOVED_SORT_KEYS.has(o.key)) return null;
-  return { key: o.key as SortKey, asc: o.asc };
-}
+type LegacyCustomOrders = Partial<Record<CustomOrderColumn, string[]>>;
 
-/**
- * Parse a nest chain. Accepts v3 arrays, v2 single objects, and null (unsorted).
- * Drops unknown / removed keys and duplicate columns. Explicit `[]` / null →
- * unsorted; a non-empty array that yields no valid levels → DEFAULT_SORT.
- */
-function parseSort(s: unknown): SortState {
-  if (s === null) return [];
-  if (Array.isArray(s)) {
-    const seen = new Set<SortKey>();
-    const out: SortLevel[] = [];
-    for (const item of s) {
-      const level = parseSortLevel(item);
-      if (!level || seen.has(level.key)) continue;
-      seen.add(level.key);
-      out.push(level);
-    }
-    if (out.length > 0) return out;
-    return s.length === 0 ? [] : DEFAULT_SORT;
-  }
-  // v2 single-object shape → one-element chain.
-  const level = parseSortLevel(s);
-  if (level) return [level];
-  return DEFAULT_SORT;
-}
-
-/** Keep only known columns with all-string value lists (else drop the column). */
-function parseCustomOrders(v: unknown): CustomOrders {
+function parseLegacyCustomOrders(v: unknown): LegacyCustomOrders {
   if (typeof v !== "object" || v === null) return {};
   const o = v as Record<string, unknown>;
-  const out: CustomOrders = {};
+  const out: LegacyCustomOrders = {};
   for (const col of CUSTOM_ORDER_COLUMNS) {
     const list = o[col];
     if (Array.isArray(list) && list.every((s) => typeof s === "string")) {
@@ -97,6 +68,59 @@ function parseCustomOrders(v: unknown): CustomOrders {
     }
   }
   return out;
+}
+
+function parseSortLevel(
+  s: unknown,
+  legacyOrders: LegacyCustomOrders,
+): SortLevel | null {
+  if (typeof s !== "object" || s === null) return null;
+  const o = s as Record<string, unknown>;
+  if (!isSortKey(o.key) || REMOVED_SORT_KEYS.has(o.key)) return null;
+  const key = o.key as SortKey;
+
+  // v4 discriminated union.
+  if (o.kind === "custom") {
+    if (!isCustomOrderColumn(key)) return null;
+    if (!Array.isArray(o.order) || !o.order.every((x) => typeof x === "string")) {
+      return null;
+    }
+    return { key, kind: "custom", order: o.order as string[] };
+  }
+  if (o.kind === "dir") {
+    if (typeof o.asc !== "boolean") return null;
+    return { key, kind: "dir", asc: o.asc };
+  }
+
+  // v2/v3 `{ key, asc }` — promote to custom when a legacy order exists.
+  if (typeof o.asc !== "boolean") return null;
+  if (isCustomOrderColumn(key) && legacyOrders[key] !== undefined) {
+    return { key, kind: "custom", order: legacyOrders[key]! };
+  }
+  return { key, kind: "dir", asc: o.asc };
+}
+
+/**
+ * Parse a nest chain. Accepts v4 unions, v3 `{key,asc}[]` (+ legacy orders),
+ * v2 single objects, and null (unsorted).
+ */
+function parseSort(s: unknown, legacyOrders: LegacyCustomOrders): SortState {
+  if (s === null) return [];
+  if (Array.isArray(s)) {
+    const seen = new Set<SortKey>();
+    const out: SortLevel[] = [];
+    for (const item of s) {
+      const level = parseSortLevel(item, legacyOrders);
+      if (!level || seen.has(level.key)) continue;
+      seen.add(level.key);
+      out.push(level);
+    }
+    if (out.length > 0) return out;
+    return s.length === 0 ? [] : DEFAULT_SORT;
+  }
+  const level = parseSortLevel(s, legacyOrders);
+  if (level) return [level];
+  return DEFAULT_SORT;
 }
 
 function parseFilters(f: Record<string, unknown>): TableFilters {
@@ -128,17 +152,22 @@ function parse(raw: string | null): PersistedTableState | null {
   if (typeof obj !== "object" || obj === null) return null;
   const o = obj as Record<string, unknown>;
   const version = o.version;
-  if (version !== TABLE_SCHEMA_VERSION && version !== LEGACY_SCHEMA_VERSION) {
+  if (
+    version !== TABLE_SCHEMA_VERSION &&
+    !LEGACY_SCHEMA_VERSIONS.has(version as number)
+  ) {
     return null;
   }
   if (typeof o.filters !== "object" || o.filters === null) return null;
 
   const filters = parseFilters(o.filters as Record<string, unknown>);
-  // v2 used null for unsorted; v3 uses [].
-  const sort = parseSort(o.sort);
-  const customOrders = parseCustomOrders(o.customOrders);
+  const legacyOrders =
+    version === 2 || version === 3
+      ? parseLegacyCustomOrders(o.customOrders)
+      : {};
+  const sort = parseSort(o.sort, legacyOrders);
 
-  return { version: TABLE_SCHEMA_VERSION, filters, sort, customOrders };
+  return { version: TABLE_SCHEMA_VERSION, filters, sort };
 }
 
 /** Read the stored table state, or null if absent / unreadable / stale / corrupt. */

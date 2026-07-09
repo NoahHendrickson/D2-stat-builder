@@ -9,9 +9,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import Image from "next/image";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { BUNGIE_IMAGE_BASE } from "@/lib/bungie/constants";
 import { useArmory } from "@/lib/armory/use-armory";
 import { useManifest } from "@/lib/manifest/use-manifest";
 import { availableSets } from "@/lib/armory/sets";
@@ -25,23 +23,12 @@ import {
   type StatIconMap,
 } from "@/lib/armory/stats";
 import {
-  CUSTOM_ORDER_COLUMNS,
-  DEFAULT_SORT,
   emptyFacets,
   hasActiveFilters,
-  isCustomOrderColumn,
   pieceMatchesFilters,
-  type CustomOrderColumn,
-  type CustomOrders,
   type FacetFilters,
   type SortKey,
-  type SortState,
 } from "@/lib/armor-table/filters";
-import {
-  applyCustomOrder,
-  compareRows,
-  sortValue,
-} from "@/lib/armor-table/sort";
 import { tokenizeSearchQuery } from "@/lib/armor-table/search";
 import {
   TABLE_SCHEMA_VERSION,
@@ -63,6 +50,7 @@ import {
   type Row,
 } from "@/components/armor-table/armor-table-row";
 import { SortMenu } from "@/components/armor-table/sort-menu";
+import { useArmorTableSort } from "@/components/armor-table/use-armor-table-sort";
 import { NewDropsFeed } from "@/components/armor-table/new-drops-feed";
 
 /** Approximate single-row height; the virtualizer remeasures real rows on mount. */
@@ -86,80 +74,6 @@ const COLUMN_SORT_KEYS: readonly (SortKey | undefined)[] = [
   undefined, // actions
 ];
 
-function TableHeader({
-  label,
-  icon,
-  align = "left",
-  title,
-  sortKey,
-  sort,
-  customOrders,
-  values,
-  hovered,
-  sortUndo,
-  onSortChange,
-  onCustomOrderChange,
-  onUndoSort,
-}: {
-  label: string;
-  icon?: string;
-  align?: "left" | "right";
-  title?: string;
-  sortKey: SortKey;
-  sort: SortState;
-  customOrders: CustomOrders;
-  values?: string[];
-  hovered: boolean;
-  sortUndo: SortState | null;
-  onSortChange: (
-    next: SortState,
-    opts?: { discardedChain?: SortState },
-  ) => void;
-  onCustomOrderChange: (order: string[] | undefined) => void;
-  onUndoSort: () => void;
-}) {
-  const accessibleLabel = title ?? label;
-  // HTML aria-sort only describes the primary column; nested levels still show
-  // brand arrows via SortMenu.
-  const primary = sort[0];
-  const isPrimary = primary?.key === sortKey;
-  return (
-    <th
-      className={cn(TABLE_HEAD_CELL, align === "right" && "pr-0")}
-      aria-sort={
-        isPrimary ? (primary.asc ? "ascending" : "descending") : "none"
-      }
-    >
-      <SortMenu
-        label={label}
-        title={accessibleLabel}
-        align={align}
-        sortKey={sortKey}
-        sort={sort}
-        customOrders={customOrders}
-        values={values}
-        hovered={hovered}
-        sortUndo={sortUndo}
-        onSortChange={onSortChange}
-        onCustomOrderChange={onCustomOrderChange}
-        onUndoSort={onUndoSort}
-        icon={
-          icon ? (
-            <Image
-              src={`${BUNGIE_IMAGE_BASE}${icon}`}
-              alt={accessibleLabel}
-              width={16}
-              height={16}
-              className="size-4 shrink-0 invert dark:invert-0"
-              unoptimized
-            />
-          ) : undefined
-        }
-      />
-    </th>
-  );
-}
-
 export function ArmorTable() {
   const armory = useArmory();
   const manifestStatus = useManifest();
@@ -168,24 +82,18 @@ export function ArmorTable() {
 
   const [search, setSearch] = useState("");
   const [facets, setFacets] = useState<FacetFilters>(emptyFacets);
-  const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
-  const [sortUndo, setSortUndo] = useState<SortState | null>(null);
-  const [customOrders, setCustomOrders] = useState<CustomOrders>({});
   const [pinnedSets, setPinnedSets] = useState<number[]>([]);
   const [pinnedArchetypes, setPinnedArchetypes] = useState<string[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
   const restored = useRef(false);
 
-  // Restore the last session's filters + pins on mount (absent/corrupt → defaults).
+  // Restore filters + pins on mount (sort restores inside useArmorTableSort).
   useEffect(() => {
     const saved = loadTableState();
     if (saved) {
       const { search: savedSearch, ...savedFacets } = saved.filters;
       setSearch(savedSearch);
       setFacets(savedFacets);
-      setSort(saved.sort);
-      setSortUndo(null);
-      setCustomOrders(saved.customOrders);
     }
     const savedPins = loadTablePins();
     if (savedPins) {
@@ -195,8 +103,39 @@ export function ArmorTable() {
     restored.current = true;
   }, []);
 
-  // Persist on change (debounced). The `restored` guard prevents the first render
-  // from clobbering stored data before the restore runs.
+  const pieces = armory.data?.pieces;
+  const characters: ArmoryCharacter[] = armory.data?.characters ?? [];
+
+  const rows = useMemo<Row[]>(() => {
+    if (!pieces || !manifest) return [];
+    const setNames = new Map(
+      availableSets(pieces, manifest).map((s) => [s.setHash, s.name]),
+    );
+    return pieces.map((piece) => ({
+      piece,
+      setName: piece.setHash ? setNames.get(piece.setHash) : undefined,
+      // The archetype shape (30/25/20) only exists on Armor 3.0 rolls; a tuning
+      // socket implies Armor 3.0 even if the archetype plug wasn't resolved.
+      tertiary:
+        piece.archetype !== undefined || piece.tunedStat !== undefined
+          ? tertiaryStatIndex(piece.baseStats)
+          : undefined,
+    }));
+  }, [pieces, manifest]);
+
+  const {
+    sort,
+    sortUndo,
+    applyMode,
+    clearLevel,
+    reorderCustom,
+    undoSort,
+    sortRows,
+    columnValues,
+  } = useArmorTableSort(rows);
+
+  // Persist filters + sort together (debounced). The `restored` guard prevents
+  // the first render from clobbering stored data before the restore runs.
   useEffect(() => {
     if (!restored.current) return;
     const t = window.setTimeout(() => {
@@ -204,11 +143,10 @@ export function ArmorTable() {
         version: TABLE_SCHEMA_VERSION,
         filters: { ...facets, search },
         sort,
-        customOrders,
       });
     }, 300);
     return () => window.clearTimeout(t);
-  }, [facets, search, sort, customOrders]);
+  }, [facets, search, sort]);
 
   // Pins persist debounced like the filters above — the delay also keeps the
   // initial empty state from clobbering stored pins before the restore's
@@ -245,26 +183,6 @@ export function ArmorTable() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-
-  const pieces = armory.data?.pieces;
-  const characters: ArmoryCharacter[] = armory.data?.characters ?? [];
-
-  const rows = useMemo<Row[]>(() => {
-    if (!pieces || !manifest) return [];
-    const setNames = new Map(
-      availableSets(pieces, manifest).map((s) => [s.setHash, s.name]),
-    );
-    return pieces.map((piece) => ({
-      piece,
-      setName: piece.setHash ? setNames.get(piece.setHash) : undefined,
-      // The archetype shape (30/25/20) only exists on Armor 3.0 rolls; a tuning
-      // socket implies Armor 3.0 even if the archetype plug wasn't resolved.
-      tertiary:
-        piece.archetype !== undefined || piece.tunedStat !== undefined
-          ? tertiaryStatIndex(piece.baseStats)
-          : undefined,
-    }));
-  }, [pieces, manifest]);
 
   const setOptions = useMemo<FilterOption<number>[]>(() => {
     const seen = new Map<number, string>();
@@ -311,9 +229,8 @@ export function ArmorTable() {
     const matches = rows.filter((r) =>
       pieceMatchesFilters(r.piece, r.tertiary, facets, searchTokens),
     );
-    if (sort.length === 0) return matches;
-    return matches.sort((a, b) => compareRows(a, b, sort, customOrders));
-  }, [rows, facets, searchTokens, sort, customOrders]);
+    return sortRows(matches);
+  }, [rows, facets, searchTokens, sortRows]);
 
   const filtersActive = hasActiveFilters({ ...facets, search });
 
@@ -327,43 +244,6 @@ export function ArmorTable() {
     value: FacetFilters[K],
   ) => setFacets((f) => ({ ...f, [key]: value }));
 
-  // Distinct values per custom-orderable column, in effective sort order —
-  // this feeds each header's Custom tab, which returns a full new order.
-  const orderedColumnValues = useMemo(() => {
-    const distinct: Record<CustomOrderColumn, Set<string>> = {
-      class: new Set(),
-      archetype: new Set(),
-      tertiary: new Set(),
-      tuned: new Set(),
-      set: new Set(),
-    };
-    for (const r of rows) {
-      for (const col of CUSTOM_ORDER_COLUMNS) {
-        const v = sortValue(r, col);
-        if (typeof v === "string") distinct[col].add(v);
-      }
-    }
-    const out = {} as Record<CustomOrderColumn, string[]>;
-    for (const col of CUSTOM_ORDER_COLUMNS) {
-      out[col] = applyCustomOrder([...distinct[col]], customOrders[col]);
-    }
-    return out;
-  }, [rows, customOrders]);
-
-  const setColumnOrder = useCallback(
-    (col: CustomOrderColumn, order: string[] | undefined) => {
-      setCustomOrders((prev) => {
-        if (order === undefined) {
-          const next = { ...prev };
-          delete next[col];
-          return next;
-        }
-        return { ...prev, [col]: order };
-      });
-    },
-    [],
-  );
-
   // Track which column the pointer is over (via cell delegation) so the header
   // can reveal its sort arrow when hovering anywhere in the column. Rows are
   // memoized, so this state change only re-renders the header.
@@ -376,41 +256,6 @@ export function ArmorTable() {
   };
   const hoveredSortKey =
     hoveredCol !== null ? COLUMN_SORT_KEYS[hoveredCol] : undefined;
-
-  const changeSort = useCallback(
-    (next: SortState, opts?: { discardedChain?: SortState }) => {
-      if (opts?.discardedChain && opts.discardedChain.length > 0) {
-        setSortUndo(opts.discardedChain);
-      } else {
-        setSortUndo(null);
-      }
-      setSort(next);
-    },
-    [],
-  );
-
-  const undoSort = useCallback(() => {
-    setSortUndo((prev) => {
-      if (prev) setSort(prev);
-      return null;
-    });
-  }, []);
-
-  const headerProps = (sortKey: SortKey) => ({
-    sortKey,
-    sort,
-    customOrders,
-    hovered: hoveredSortKey === sortKey,
-    sortUndo,
-    onSortChange: changeSort,
-    onUndoSort: undoSort,
-    onCustomOrderChange: (order: string[] | undefined) => {
-      if (isCustomOrderColumn(sortKey)) setColumnOrder(sortKey, order);
-    },
-    values: isCustomOrderColumn(sortKey)
-      ? orderedColumnValues[sortKey]
-      : undefined,
-  });
 
   const togglePinnedSet = (hash: number) =>
     setPinnedSets((prev) => togglePinned(prev, hash));
@@ -472,20 +317,93 @@ export function ArmorTable() {
             {TABLE_COLGROUP}
             <thead className={cn("sticky top-0 z-10", TABLE_HEADER_BG)}>
               <tr className="text-muted-foreground text-left">
-                <TableHeader label="Name" {...headerProps("name")} />
-                <TableHeader label="Class" {...headerProps("class")} />
-                <TableHeader label="Archetype" {...headerProps("archetype")} />
-                <TableHeader label="Tertiary" {...headerProps("tertiary")} />
-                <TableHeader label="Tuned" {...headerProps("tuned")} />
-                <TableHeader label="Set bonus" {...headerProps("set")} />
+                <SortMenu
+                  label="Name"
+                  sortKey="name"
+                  sort={sort}
+                  hovered={hoveredSortKey === "name"}
+                  sortUndo={sortUndo}
+                  values={columnValues("name")}
+                  onApplyMode={applyMode}
+                  onClearLevel={clearLevel}
+                  onReorderCustom={reorderCustom}
+                  onUndoSort={undoSort}
+                />
+                <SortMenu
+                  label="Class"
+                  sortKey="class"
+                  sort={sort}
+                  hovered={hoveredSortKey === "class"}
+                  sortUndo={sortUndo}
+                  values={columnValues("class")}
+                  onApplyMode={applyMode}
+                  onClearLevel={clearLevel}
+                  onReorderCustom={reorderCustom}
+                  onUndoSort={undoSort}
+                />
+                <SortMenu
+                  label="Archetype"
+                  sortKey="archetype"
+                  sort={sort}
+                  hovered={hoveredSortKey === "archetype"}
+                  sortUndo={sortUndo}
+                  values={columnValues("archetype")}
+                  onApplyMode={applyMode}
+                  onClearLevel={clearLevel}
+                  onReorderCustom={reorderCustom}
+                  onUndoSort={undoSort}
+                />
+                <SortMenu
+                  label="Tertiary"
+                  sortKey="tertiary"
+                  sort={sort}
+                  hovered={hoveredSortKey === "tertiary"}
+                  sortUndo={sortUndo}
+                  values={columnValues("tertiary")}
+                  onApplyMode={applyMode}
+                  onClearLevel={clearLevel}
+                  onReorderCustom={reorderCustom}
+                  onUndoSort={undoSort}
+                />
+                <SortMenu
+                  label="Tuned"
+                  sortKey="tuned"
+                  sort={sort}
+                  hovered={hoveredSortKey === "tuned"}
+                  sortUndo={sortUndo}
+                  values={columnValues("tuned")}
+                  onApplyMode={applyMode}
+                  onClearLevel={clearLevel}
+                  onReorderCustom={reorderCustom}
+                  onUndoSort={undoSort}
+                />
+                <SortMenu
+                  label="Set bonus"
+                  sortKey="set"
+                  sort={sort}
+                  hovered={hoveredSortKey === "set"}
+                  sortUndo={sortUndo}
+                  values={columnValues("set")}
+                  onApplyMode={applyMode}
+                  onClearLevel={clearLevel}
+                  onReorderCustom={reorderCustom}
+                  onUndoSort={undoSort}
+                />
                 {STAT_DISPLAY_ORDER.map((key) => (
-                  <TableHeader
+                  <SortMenu
                     key={key}
                     label={STAT_LABELS[key]}
                     icon={statIcons[key]}
                     title={STAT_LABELS[key]}
                     align="right"
-                    {...headerProps(`stat-${key}`)}
+                    sortKey={`stat-${key}`}
+                    sort={sort}
+                    hovered={hoveredSortKey === `stat-${key}`}
+                    sortUndo={sortUndo}
+                    onApplyMode={applyMode}
+                    onClearLevel={clearLevel}
+                    onReorderCustom={reorderCustom}
+                    onUndoSort={undoSort}
                   />
                 ))}
                 <th className={cn(TABLE_HEAD_CELL, "text-left")}>Actions</th>
