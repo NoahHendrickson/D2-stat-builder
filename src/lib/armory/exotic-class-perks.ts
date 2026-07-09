@@ -11,6 +11,7 @@
  * Column pools match DIM's exotic-class-item.ts (sockets 10 / 11).
  */
 import type { Manifest } from "@/lib/manifest/load";
+import type { ArmorPiece } from "./normalize";
 import {
   ARMOR_ARCHETYPE_PLUG_CATEGORY,
   MASTERWORK_OFF_STAT_BONUS,
@@ -18,7 +19,6 @@ import {
   STAT_ORDER,
   offArchetypeIndices,
   type StatArray,
-  type StatKey,
 } from "./stats";
 
 /** Item hashes — Stoicism (Titan), Relativism (Hunter), Solipsism (Warlock). */
@@ -92,7 +92,7 @@ export const SPIRIT_HASH_SET: ReadonlySet<number> = new Set(
  * Preferred tertiary STAT_ORDER index for each right-column Spirit.
  * Not in the manifest — thematic defaults from the Spirit's ability fantasy.
  * Verified so far: Cyrtarachne → grenade (community / Edge of Fate previews).
- * Noah should cross-check remaining entries against owned rolls.
+ * Remaining entries are thematic defaults pending owned-roll verification.
  */
 export const RIGHT_SPIRIT_PREFERRED_TERTIARY: Record<number, number> = {
   // Shared
@@ -328,16 +328,6 @@ export function synthesizeClassItemStats(
   return out;
 }
 
-/** Human-readable archetype label for a left Spirit (e.g. "Super / Melee"). */
-export function archetypeLabel(
-  primary: number,
-  secondary: number,
-): string {
-  const p = STAT_ORDER[primary] as StatKey;
-  const s = STAT_ORDER[secondary] as StatKey;
-  return `${p[0]!.toUpperCase()}${p.slice(1)} / ${s[0]!.toUpperCase()}${s.slice(1)}`;
-}
-
 /**
  * Whether an owned piece's Spirit pair matches the selection.
  * `null` in a column means Any.
@@ -351,4 +341,118 @@ export function matchesSpiritSelection(
   if (left !== null && piecePerks[0] !== left) return false;
   if (right !== null && piecePerks[1] !== right) return false;
   return true;
+}
+
+export interface SyntheticClassItemParams {
+  itemHash: number;
+  left: number;
+  right: number;
+  name: string;
+  icon?: string;
+  classType: number;
+}
+
+/**
+ * Build a theoretical T5 exotic class item for an unowned Spirit pair.
+ * Returns null when the left Spirit has no archetype investmentStats.
+ */
+export function buildSyntheticClassItem(
+  manifest: Manifest,
+  params: SyntheticClassItemParams,
+): ArmorPiece | null {
+  const { itemHash, left, right, name, icon, classType } = params;
+  const baseStats = synthesizeClassItemBaseStats(manifest, left, right);
+  const stats = synthesizeClassItemStats(manifest, left, right);
+  if (!baseStats || !stats) return null;
+  return {
+    instanceId: `${SYNTHETIC_CLASS_ITEM_ID_PREFIX}${itemHash}:${left}:${right}`,
+    itemHash,
+    name,
+    icon,
+    slot: "classItem",
+    classType,
+    isExotic: true,
+    isArtifice: false,
+    baseStats,
+    stats,
+    // Flexible exotic tuning — any +5 direction (same as owned T5 exotics).
+    tunedStat: 0,
+    exoticPerkHashes: [left, right],
+    location: "vault",
+  };
+}
+
+export interface SpiritSelectionParams {
+  selectedClassItemHash: number;
+  exoticPerks: [number | null, number | null];
+  name: string;
+  icon?: string;
+  classType: number;
+}
+
+/**
+ * Apply Spirit selection to a class-item pool: keep legendaries, keep matching
+ * owned exotic rolls, and inject a synthetic T5 roll when a concrete pair has
+ * no owned match. Returns `pieces` unchanged when no Spirit column is set.
+ */
+export function applySpiritSelectionToClassItems(
+  pieces: ArmorPiece[],
+  manifest: Manifest,
+  params: SpiritSelectionParams,
+): ArmorPiece[] {
+  const { selectedClassItemHash, exoticPerks, name, icon, classType } = params;
+  const [left, right] = exoticPerks;
+  if (left === null && right === null) return pieces;
+
+  const matching = pieces.filter(
+    (p) =>
+      p.isExotic &&
+      p.itemHash === selectedClassItemHash &&
+      matchesSpiritSelection(p.exoticPerkHashes, exoticPerks),
+  );
+  const next = [...pieces.filter((p) => !p.isExotic), ...matching];
+
+  if (matching.length > 0 || left === null || right === null) return next;
+
+  const synthetic = buildSyntheticClassItem(manifest, {
+    itemHash: selectedClassItemHash,
+    left,
+    right,
+    name,
+    icon,
+    classType,
+  });
+  return synthetic ? [...next, synthetic] : next;
+}
+
+/**
+ * Synthetic piece for results lookup when a concrete Spirit pair has no owned
+ * match. Returns null for partial (Any) selections or when synthesis fails.
+ */
+export function syntheticClassItemForSelection(
+  pieces: ArmorPiece[],
+  manifest: Manifest,
+  params: SpiritSelectionParams,
+): ArmorPiece | null {
+  const { selectedClassItemHash, exoticPerks, name, icon, classType } = params;
+  const [left, right] = exoticPerks;
+  if (left === null || right === null) return null;
+
+  const ownedMatch = pieces.some(
+    (p) =>
+      p.isExotic &&
+      p.slot === "classItem" &&
+      p.itemHash === selectedClassItemHash &&
+      matchesSpiritSelection(p.exoticPerkHashes, exoticPerks),
+  );
+  if (ownedMatch) return null;
+
+  return buildSyntheticClassItem(manifest, {
+    itemHash: selectedClassItemHash,
+    left,
+    right,
+    name,
+    icon,
+    classType,
+  });
 }
