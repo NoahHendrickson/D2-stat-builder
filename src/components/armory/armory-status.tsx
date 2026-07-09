@@ -3,7 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowsClockwise, CheckCircle, CircleNotch, XCircle } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
+import { ArmoryDiagnostics } from "@/components/armory/armory-diagnostics";
 import { useArmory } from "@/lib/armory/use-armory";
+import { useArmoryDebug } from "@/lib/armory/use-armory-debug";
 import { useSession } from "@/lib/auth/use-session";
 import {
   ARMOR_SLOTS,
@@ -32,6 +34,7 @@ const REFRESH_SUCCESS_MS = 2500;
 
 export function ArmoryStatus() {
   const session = useSession();
+  const debugMode = useArmoryDebug();
   const { data, isLoading, isError, error, isFetching, refetch } = useArmory();
   const [refreshSucceeded, setRefreshSucceeded] = useState(false);
   const successTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -70,6 +73,16 @@ export function ArmoryStatus() {
   }
   const classes = [0, 1, 2].filter((c) => byClass.has(c));
 
+  const linkedDestinyProfile = Boolean(
+    session.data?.user?.destinyMembershipId &&
+      session.data.user.destinyMembershipType != null,
+  );
+  const showDiagnostics =
+    debugMode ||
+    (!isLoading &&
+      (isError ||
+        (data != null && (data.characters.length === 0 || pieces.length === 0))));
+
   return (
     <Card className="w-full">
       <CardHeader>
@@ -89,6 +102,17 @@ export function ArmoryStatus() {
       </CardHeader>
       {!isLoading && (
         <CardContent className="space-y-4">
+          {showDiagnostics && (
+            <ArmoryDiagnostics
+              linkedDestinyProfile={linkedDestinyProfile}
+              characterCount={data?.characters.length ?? 0}
+              normalizedArmor={pieces.length}
+              rawItems={data?.rawItems}
+              loadError={
+                isError ? ((error as Error)?.message ?? "unknown error") : undefined
+              }
+            />
+          )}
           {data && pieces.length > 0 && (
             <table className="w-full text-sm">
               <thead>

@@ -4,6 +4,7 @@ import type {
 } from "bungie-api-ts/destiny2";
 import type { Manifest } from "@/lib/manifest/load";
 import { normalizeArmory, type ArmorPiece } from "./normalize";
+import { countProfileItems, type ProfileItemCounts } from "./profile-counts";
 
 export interface ArmoryCharacter {
   id: string;
@@ -20,6 +21,8 @@ export interface ArmoryCharacter {
 export interface Armory {
   pieces: ArmorPiece[];
   characters: ArmoryCharacter[];
+  /** Pre-normalization Bungie item totals — counts only, for support diagnostics. */
+  rawItems: ProfileItemCounts;
 }
 
 /** A failed armory fetch, carrying the proxy's HTTP status (401 = session expired). */
@@ -57,5 +60,5 @@ export async function fetchArmory(manifest: Manifest): Promise<Armory> {
     dateLastPlayed: c.dateLastPlayed,
   }));
 
-  return { pieces, characters };
+  return { pieces, characters, rawItems: countProfileItems(profile) };
 }
