@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { ArrowsClockwise, CheckCircle, CircleNotch, XCircle } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
+import { ArmoryDiagnosticsGate } from "@/components/armory/armory-diagnostics-gate";
 import { useArmory } from "@/lib/armory/use-armory";
 import { useSession } from "@/lib/auth/use-session";
 import {
@@ -32,6 +34,7 @@ const REFRESH_SUCCESS_MS = 2500;
 
 export function ArmoryStatus() {
   const session = useSession();
+  const queryClient = useQueryClient();
   const { data, isLoading, isError, error, isFetching, refetch } = useArmory();
   const [refreshSucceeded, setRefreshSucceeded] = useState(false);
   const successTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -47,6 +50,8 @@ export function ArmoryStatus() {
     setRefreshSucceeded(false);
     const result = await refetch();
     if (!result.isSuccess) return;
+
+    void queryClient.invalidateQueries({ queryKey: ["armory-diagnostics-counts"] });
 
     setRefreshSucceeded(true);
     if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current);
@@ -89,6 +94,7 @@ export function ArmoryStatus() {
       </CardHeader>
       {!isLoading && (
         <CardContent className="space-y-4">
+          <ArmoryDiagnosticsGate />
           {data && pieces.length > 0 && (
             <table className="w-full text-sm">
               <thead>
