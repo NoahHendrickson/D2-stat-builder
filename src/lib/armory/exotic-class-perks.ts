@@ -227,6 +227,19 @@ export function archetypePlugForStats(
 }
 
 /**
+ * Armor 3.0 archetype display name for a left-column Spirit (exotic class items
+ * have no armor_archetypes socket — the Spirit's investmentStats encode 30/25).
+ */
+export function archetypeNameFromSpirit(
+  manifest: Manifest,
+  leftSpiritHash: number,
+): string | undefined {
+  const arch = archetypeFromPlug(manifest, leftSpiritHash);
+  if (!arch) return undefined;
+  return archetypePlugForStats(manifest, arch.primary, arch.secondary)?.name;
+}
+
+/**
  * Spirit perks for one exotic class item, split by column, names/icons from manifest.
  */
 export function availableSpiritPerks(

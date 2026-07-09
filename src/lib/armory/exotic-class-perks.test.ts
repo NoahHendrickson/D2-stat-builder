@@ -7,6 +7,7 @@ import {
   RIGHT_SPIRIT_PREFERRED_TERTIARY,
   SYNTHETIC_CLASS_ITEM_ID_PREFIX,
   applySpiritSelectionToClassItems,
+  archetypeNameFromSpirit,
   archetypePlugForStats,
   buildSyntheticClassItem,
   matchesSpiritSelection,
@@ -130,6 +131,24 @@ test("archetypePlugForStats resolves Paragon for Super/Melee", () => {
     name: "Paragon",
     icon: "/common/destiny2_content/icons/paragon.png",
   });
+});
+
+test("archetypeNameFromSpirit derives Paragon from Inmost Light investmentStats", () => {
+  const PARAGON = 4227065942;
+  const manifest = mockManifest({
+    [INMOST]: {
+      investmentStats: [
+        { statTypeHash: H.super, value: 30 },
+        { statTypeHash: H.melee, value: 25 },
+      ],
+    },
+    [PARAGON]: {
+      plug: { plugCategoryIdentifier: "armor_archetypes" },
+      displayProperties: { name: "Paragon" },
+    },
+  });
+  expect(archetypeNameFromSpirit(manifest, INMOST)).toBe("Paragon");
+  expect(archetypeNameFromSpirit(manifest, CYRTARACHNE)).toBeUndefined();
 });
 
 test("matchesSpiritSelection treats null as Any", () => {

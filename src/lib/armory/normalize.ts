@@ -7,6 +7,8 @@ import {
   SPIRIT_HASH_SET,
   SPIRIT_SOCKET_LEFT,
   SPIRIT_SOCKET_RIGHT,
+  archetypeNameFromSpirit,
+  isExoticClassItemHash,
 } from "./exotic-class-perks";
 import {
   ARMOR_ARCHETYPE_PLUG_CATEGORY,
@@ -37,9 +39,11 @@ const LEGACY_PLUG_PATTERNS = [...CHANGEABLE_PLUG_PATTERNS, "masterworks"];
 const LEGACY_MASTERWORK_BONUS = 2;
 
 /**
- * Artifice mod-socket plug category prefix. Matches the empty/socketed artifice mod
- * socket (`enhancements.artifice`) and the legacy-exotic "Locked Artifice Socket"
- * (`enhancements.artifice.exotic`).
+ * Usable artifice mod-socket category (`Empty Mod Socket` / Forged +3 mods).
+ * Deliberately excludes `enhancements.artifice.exotic` — that is the unpaid
+ * "Locked Artifice Socket" / "Upgrade to Artifice Armor" payment slot. Exotic
+ * class items still ship that locked socket in the def even though Edge of Fate
+ * removed their artifice capability in favor of Tier-5 tuning.
  */
 const ARTIFICE_SOCKET_CATEGORY = "enhancements.artifice";
 
@@ -272,8 +276,10 @@ function exoticClassItemPerks(
 
 /**
  * A piece is artifice if it carries the artifice intrinsic perk (legendary artifice
- * armor) OR any socket plugged in an enhancements.artifice* category (legacy exotics,
- * which have the mod socket + a "Locked Artifice Socket" but NOT the intrinsic perk).
+ * armor) OR a usable enhancements.artifice mod socket (legacy exotics' empty/Forged
+ * slot). The locked exotic payment socket (`enhancements.artifice.exotic`) does NOT
+ * count — every exotic def still has it, including Armor 3.0 class items that lost
+ * artifice entirely.
  */
 function isArtificePiece(
   instanceId: string,
@@ -287,7 +293,24 @@ function isArtificePiece(
     if (socket.plugHash === ARTIFICE_PERK_HASH) return true;
     const cat = manifest.def("DestinyInventoryItemDefinition", socket.plugHash)?.plug
       ?.plugCategoryIdentifier;
-    if (cat?.startsWith(ARTIFICE_SOCKET_CATEGORY)) return true;
+    if (cat === ARTIFICE_SOCKET_CATEGORY) return true;
+  }
+  return false;
+}
+
+/** True when a tuning-category plug is currently in any socket (empty or slotted). */
+function hasTuningSocket(
+  instanceId: string,
+  profile: DestinyProfileResponse,
+  manifest: Manifest,
+): boolean {
+  const sockets = profile.itemComponents?.sockets?.data?.[instanceId]?.sockets;
+  if (!sockets) return false;
+  for (const socket of sockets) {
+    if (!socket.plugHash) continue;
+    const cat = manifest.def("DestinyInventoryItemDefinition", socket.plugHash)?.plug
+      ?.plugCategoryIdentifier;
+    if (cat?.includes(TUNING_PLUG_CATEGORY)) return true;
   }
   return false;
 }
@@ -309,8 +332,32 @@ function buildPiece(
     ARMOR_BUCKETS[def.inventory?.bucketTypeHash as keyof typeof ARMOR_BUCKETS];
   if (!slot) return null;
 
-  const tunedStat = computeTunedStat(item.itemInstanceId, profile, manifest);
-  const archetype = archetypeName(item.itemInstanceId, profile, manifest);
+  const isExotic = def.inventory?.tierType === TIER_TYPE_EXOTIC;
+  const exoticClassItem = isExotic && isExoticClassItemHash(item.itemHash);
+  const exoticPerkHashes = exoticClassItem
+    ? exoticClassItemPerks(item.itemInstanceId, profile)
+    : undefined;
+
+  // Rolled tuned stat from component 310. Exotic class items (and other T5 exotics)
+  // use a flexible tuning plug set — when 310 is missing but the empty tuning socket
+  // is present, treat them as tunable with an arbitrary sentinel (optimizer ignores
+  // the rolled value for exotics and allows any +5 direction).
+  let tunedStat = computeTunedStat(item.itemInstanceId, profile, manifest);
+  if (
+    tunedStat === undefined &&
+    exoticClassItem &&
+    hasTuningSocket(item.itemInstanceId, profile, manifest)
+  ) {
+    tunedStat = 0;
+  }
+
+  let archetype = archetypeName(item.itemInstanceId, profile, manifest);
+  // Exotic class items have no armor_archetypes plug — the left Spirit encodes the
+  // 30/25 pair. Derive the display name so the table/inspector match other T5 gear.
+  if (archetype === undefined && exoticPerkHashes) {
+    archetype = archetypeNameFromSpirit(manifest, exoticPerkHashes[0]);
+  }
+
   // No tuning socket AND no archetype plug → legacy (Armor 2.0). (Sub-Tier-5 Armor
   // 3.0 pieces lack the tuning socket but still carry an archetype.)
   const legacy = tunedStat === undefined && archetype === undefined;
@@ -325,12 +372,6 @@ function buildPiece(
     for (let i = 0; i < stats.length; i++) stats[i] += bonus[i];
   }
 
-  const isExotic = def.inventory?.tierType === TIER_TYPE_EXOTIC;
-  const exoticPerkHashes =
-    isExotic && slot === "classItem"
-      ? exoticClassItemPerks(item.itemInstanceId, profile)
-      : undefined;
-
   return {
     instanceId: item.itemInstanceId,
     itemHash: item.itemHash,
@@ -339,7 +380,11 @@ function buildPiece(
     slot,
     classType: def.classType ?? 3,
     isExotic,
-    isArtifice: isArtificePiece(item.itemInstanceId, profile, manifest),
+    // Exotic class items lost artifice at Edge of Fate (tuning replaced it). Their
+    // defs still carry a Locked Artifice Socket — never treat them as artifice.
+    isArtifice: exoticClassItem
+      ? false
+      : isArtificePiece(item.itemInstanceId, profile, manifest),
     setHash: def.equippingBlock?.equipableItemSetHash || undefined,
     archetype,
     baseStats,

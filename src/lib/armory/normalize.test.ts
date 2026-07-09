@@ -264,12 +264,13 @@ test("legacy piece already masterworked: the MW plug is stripped, +2 re-applied 
 
 /**
  * Legacy exotics don't carry the "Artifice Armor" intrinsic perk (3727270518) —
- * their artifice capability appears as sockets in the enhancements.artifice
- * categories (the mod socket, plus a "Locked Artifice Socket" in
- * enhancements.artifice.exotic). Real-world regression: isArtifice was false for
- * every legacy exotic, so the artifice +3 never applied in-app.
+ * their artifice capability is the usable enhancements.artifice mod socket
+ * (Empty Mod Socket / Forged +3). The locked exotic payment socket
+ * (`enhancements.artifice.exotic`) is present on every exotic def and must NOT
+ * alone mark a piece as artifice — exotic class items still ship it after
+ * losing artifice at Edge of Fate.
  */
-test("artifice detection: perk hash OR an enhancements.artifice-category socket", () => {
+test("artifice detection: perk hash OR a usable enhancements.artifice socket", () => {
   const ITEM = 890;
   const EMPTY_ARTIFICE = 4173924323;
   const LOCKED_ARTIFICE = 1656746282;
@@ -311,10 +312,10 @@ test("artifice detection: perk hash OR an enhancements.artifice-category socket"
       },
     }) as unknown as DestinyProfileResponse;
 
-  // The artifice mod socket alone marks the piece (legacy exotic shape).
+  // The usable artifice mod socket alone marks the piece (legacy exotic shape).
   expect(normalizeArmory(mk([{ plugHash: EMPTY_ARTIFICE }]), manifest)[0].isArtifice).toBe(true);
-  // The locked exotic artifice socket counts too.
-  expect(normalizeArmory(mk([{ plugHash: LOCKED_ARTIFICE }]), manifest)[0].isArtifice).toBe(true);
+  // Locked payment socket alone is NOT artifice (exotic class item shape).
+  expect(normalizeArmory(mk([{ plugHash: LOCKED_ARTIFICE }]), manifest)[0].isArtifice).toBe(false);
   // No artifice sockets, no perk → false.
   expect(normalizeArmory(mk([]), manifest)[0].isArtifice).toBe(false);
 });
@@ -434,6 +435,145 @@ test("exotic class items capture Spirit perk hashes from sockets 10/11", () => {
   expect(piece.isExotic).toBe(true);
   expect(piece.slot).toBe("classItem");
   expect(piece.exoticPerkHashes).toEqual([LEFT, RIGHT]);
+});
+
+/**
+ * Edge of Fate converted exotic class items to Tier-5 Armor 3.0: they have a
+ * tuning socket (flexible, like other T5 exotics) and lost artifice. The item
+ * def still ships a Locked Artifice Socket (`enhancements.artifice.exotic`) and
+ * has no armor_archetypes plug — left Spirit encodes the archetype instead.
+ */
+test("exotic class items are tunable T5, never artifice, archetype from left Spirit", () => {
+  const ITEM = 2273643087; // Solipsism
+  const LEFT = 1476923953; // Inmost Light → Super/Melee (Paragon)
+  const RIGHT = 183430246; // Swarm
+  const EMPTY_TUNING = 2121121504;
+  const LOCKED_ARTIFICE = 1656746282;
+  const ARCH_PLUG = 4227065942; // Paragon
+  const cur = {
+    [H.weapons]: 5,
+    [H.health]: 5,
+    [H.class]: 5,
+    [H.grenade]: 20,
+    [H.super]: 30,
+    [H.melee]: 25,
+  };
+  const defs: Record<number, object> = {
+    [ITEM]: {
+      itemType: 2,
+      classType: 2,
+      displayProperties: { name: "Solipsism" },
+      inventory: { bucketTypeHash: 1585787867, tierType: 6 },
+    },
+    [LEFT]: {
+      // Super 30 / Melee 25 — matches ARCHETYPE_PLUG_BY_STATS "4,5" → Paragon.
+      investmentStats: [
+        { statTypeHash: H.super, value: 30 },
+        { statTypeHash: H.melee, value: 25 },
+      ],
+    },
+    [RIGHT]: { investmentStats: [] },
+    [EMPTY_TUNING]: {
+      plug: {
+        plugCategoryIdentifier:
+          "core.gear_systems.armor_tiering.plugs.tuning.mods",
+      },
+    },
+    [LOCKED_ARTIFICE]: {
+      plug: { plugCategoryIdentifier: "enhancements.artifice.exotic" },
+    },
+    [ARCH_PLUG]: {
+      plug: {
+        plugCategoryIdentifier:
+          "core.gear_systems.armor_tiering.plugs.armor_archetypes",
+      },
+      displayProperties: { name: "Paragon" },
+    },
+  };
+  const manifest = {
+    def: (_table: string, hash: number | null | undefined) =>
+      hash == null ? undefined : defs[hash],
+  } as unknown as Manifest;
+
+  // Live shape: tuning at 6, Spirits at 10/11, locked artifice at 14.
+  const sockets = Array.from({ length: 16 }, (_, i) => {
+    if (i === 6) return { plugHash: EMPTY_TUNING };
+    if (i === 10) return { plugHash: LEFT };
+    if (i === 11) return { plugHash: RIGHT };
+    if (i === 14) return { plugHash: LOCKED_ARTIFICE };
+    return {};
+  });
+
+  // Flexible exotic tuning plug set (all six +5 directions) — same as other T5 exotics.
+  const reusablePlugs = {
+    "6": [
+      {
+        plugItemHash: 388618952, // +Health / -Melee (any directional proves tunable)
+      },
+      {
+        plugItemHash: 4164883102, // +Melee / -Health
+      },
+    ],
+  };
+  defs[388618952] = {
+    plug: {
+      plugCategoryIdentifier:
+        "core.gear_systems.armor_tiering.plugs.tuning.mods",
+    },
+    investmentStats: [
+      { statTypeHash: H.health, value: 5 },
+      { statTypeHash: H.melee, value: -5 },
+    ],
+  };
+  defs[4164883102] = {
+    plug: {
+      plugCategoryIdentifier:
+        "core.gear_systems.armor_tiering.plugs.tuning.mods",
+    },
+    investmentStats: [
+      { statTypeHash: H.melee, value: 5 },
+      { statTypeHash: H.health, value: -5 },
+    ],
+  };
+
+  const profile = {
+    itemComponents: {
+      stats: {
+        data: {
+          c1: {
+            stats: Object.fromEntries(
+              Object.entries(cur).map(([h, v]) => [h, { value: v }]),
+            ),
+          },
+        },
+      },
+      sockets: { data: { c1: { sockets } } },
+      reusablePlugs: { data: { c1: { plugs: reusablePlugs } } },
+    },
+    profileInventory: {
+      data: { items: [{ itemInstanceId: "c1", itemHash: ITEM }] },
+    },
+  } as unknown as DestinyProfileResponse;
+
+  const piece = normalizeArmory(profile, manifest)[0];
+  expect(piece.isArtifice).toBe(false);
+  expect(piece.tunedStat).toBeDefined();
+  expect(piece.archetype).toBe("Paragon");
+  // Armor 3.0 MW assumption (not legacy +2-all-six): off-arch stay at 5.
+  expect(piece.stats).toEqual([5, 5, 5, 20, 30, 25]);
+
+  // Even with no reusablePlugs, the empty tuning socket still marks T5 + tunable.
+  const noReusable = {
+    ...profile,
+    itemComponents: {
+      ...(profile as { itemComponents: object }).itemComponents,
+      reusablePlugs: undefined,
+    },
+  } as unknown as DestinyProfileResponse;
+  const fallback = normalizeArmory(noReusable, manifest)[0];
+  expect(fallback.isArtifice).toBe(false);
+  expect(fallback.tunedStat).toBe(0);
+  expect(fallback.archetype).toBe("Paragon");
 });
 
 test("a directional tune (with a −5) is reversed in full on the stats it names", () => {
