@@ -4,6 +4,11 @@ import type {
 } from "bungie-api-ts/destiny2";
 import type { Manifest } from "@/lib/manifest/load";
 import {
+  SPIRIT_HASH_SET,
+  SPIRIT_SOCKET_LEFT,
+  SPIRIT_SOCKET_RIGHT,
+} from "./exotic-class-perks";
+import {
   ARMOR_ARCHETYPE_PLUG_CATEGORY,
   ARMOR_BUCKETS,
   ARTIFICE_PERK_HASH,
@@ -65,6 +70,11 @@ export interface ArmorPiece {
    * directional tuning plugs add +5 to), or undefined if the piece can't be tuned.
    */
   tunedStat?: number;
+  /**
+   * Exotic class item Spirit pair [left, right] from sockets 10/11, when both are
+   * known Spirit plugs. Used to filter theoretical perk selections against owned rolls.
+   */
+  exoticPerkHashes?: [number, number];
   location: ArmorLocation;
   characterId?: string;
 }
@@ -229,6 +239,38 @@ function archetypeName(
 }
 
 /**
+ * Spirit perk pair on an exotic class item (sockets 10 / 11). Prefers those indices;
+ * falls back to scanning for any two Spirit plugs in socket order (D2AP-style).
+ */
+function exoticClassItemPerks(
+  instanceId: string,
+  profile: DestinyProfileResponse,
+): [number, number] | undefined {
+  const sockets = profile.itemComponents?.sockets?.data?.[instanceId]?.sockets;
+  if (!sockets) return undefined;
+
+  const left = sockets[SPIRIT_SOCKET_LEFT]?.plugHash;
+  const right = sockets[SPIRIT_SOCKET_RIGHT]?.plugHash;
+  if (
+    left &&
+    right &&
+    SPIRIT_HASH_SET.has(left) &&
+    SPIRIT_HASH_SET.has(right)
+  ) {
+    return [left, right];
+  }
+
+  const found: number[] = [];
+  for (const socket of sockets) {
+    if (socket.plugHash && SPIRIT_HASH_SET.has(socket.plugHash)) {
+      found.push(socket.plugHash);
+      if (found.length === 2) return [found[0], found[1]];
+    }
+  }
+  return undefined;
+}
+
+/**
  * A piece is artifice if it carries the artifice intrinsic perk (legendary artifice
  * armor) OR any socket plugged in an enhancements.artifice* category (legacy exotics,
  * which have the mod socket + a "Locked Artifice Socket" but NOT the intrinsic perk).
@@ -283,6 +325,12 @@ function buildPiece(
     for (let i = 0; i < stats.length; i++) stats[i] += bonus[i];
   }
 
+  const isExotic = def.inventory?.tierType === TIER_TYPE_EXOTIC;
+  const exoticPerkHashes =
+    isExotic && slot === "classItem"
+      ? exoticClassItemPerks(item.itemInstanceId, profile)
+      : undefined;
+
   return {
     instanceId: item.itemInstanceId,
     itemHash: item.itemHash,
@@ -290,13 +338,14 @@ function buildPiece(
     icon: def.displayProperties?.icon,
     slot,
     classType: def.classType ?? 3,
-    isExotic: def.inventory?.tierType === TIER_TYPE_EXOTIC,
+    isExotic,
     isArtifice: isArtificePiece(item.itemInstanceId, profile, manifest),
     setHash: def.equippingBlock?.equipableItemSetHash || undefined,
     archetype,
     baseStats,
     stats,
     tunedStat,
+    exoticPerkHashes,
     location,
     characterId,
   };

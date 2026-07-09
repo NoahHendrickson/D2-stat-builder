@@ -28,6 +28,15 @@ import {
   type Subclass,
 } from "@/lib/armory/fragments";
 import {
+  availableExoticClassItems,
+  availableSpiritPerks,
+  isExoticClassItemHash,
+  matchesSpiritSelection,
+  synthesizeClassItemBaseStats,
+  synthesizeClassItemStats,
+  SYNTHETIC_CLASS_ITEM_ID_PREFIX,
+} from "@/lib/armory/exotic-class-perks";
+import {
   ARMOR_SLOTS,
   BALANCED_TUNING_PLUG_HASH,
   CLASS_NAMES,
@@ -38,6 +47,7 @@ import {
   offArchetypeIndices,
   type StatIconMap,
 } from "@/lib/armory/stats";
+import type { ArmorPiece } from "@/lib/armory/normalize";
 import { Slider, sliderEdgeAlignedLeft } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 import {
@@ -59,11 +69,12 @@ import { SignInCard } from "@/components/auth/sign-in-card";
 import { ArmoryStatus } from "@/components/armory/armory-status";
 import { ManifestStatus } from "@/components/manifest/manifest-status";
 import { ExoticPicker } from "@/components/builder/exotic-picker";
+import { ExoticClassPerkPicker } from "@/components/builder/exotic-class-perk-picker";
 import { FragmentPicker } from "@/components/builder/fragment-picker";
 import { ClassEmblemTabs } from "@/components/builder/class-emblem-tabs";
 import { BuildsSurface } from "@/components/builder/builds-surface";
 import type { BuildsColumnContentProps } from "@/components/builder/builds-column-content";
-import type { ExoticConstraint } from "@/lib/optimizer/types";
+import type { ExoticConstraint, OptimizerPiece } from "@/lib/optimizer/types";
 import {
   loadSelections,
   saveSelections,
@@ -133,6 +144,11 @@ export function BuilderPanel({
   const [setQuery, setSetQuery] = useState("");
   const [setFilters, setSetFilters] = useState<SetFilters>(DEFAULT_SET_FILTERS);
   const [selectedExotic, setSelectedExotic] = useState<number | null>(null);
+  /** Exotic class item Spirit pair; null = Any. Cleared when exotic/class changes. */
+  const [exoticPerks, setExoticPerks] = useState<[number | null, number | null]>([
+    null,
+    null,
+  ]);
   const [allowTuning, setAllowTuning] = useState(true);
   const [activeSubclass, setActiveSubclass] = useState<Subclass>("Prismatic");
   const [fragSel, setFragSel] = useState<Record<Subclass, Set<number>>>(
@@ -166,6 +182,7 @@ export function BuilderPanel({
       setUseLegacyExotics(saved.legacyExotics);
       setActiveSubclass(saved.activeSubclass);
       setFragSel(fragSelFromArrays(saved.fragSel));
+      setExoticPerks(saved.exoticPerks);
       pendingExoticName.current = saved.exoticName;
     }
     restored.current = true;
@@ -201,11 +218,6 @@ export function BuilderPanel({
         (p) => p.tunedStat !== undefined || (useLegacyExotics && p.isExotic),
       ),
     [classPieces, useLegacyExotics],
-  );
-
-  const pieceMap = useMemo(
-    () => new Map(classPieces.map((p) => [p.instanceId, p])),
-    [classPieces],
   );
 
   const sets = useMemo(
@@ -372,6 +384,7 @@ export function BuilderPanel({
 
   // Dedupe by name — the same exotic can exist in multiple versions (Armor 2.0 vs 3.0)
   // with different hashes; the optimizer picks whichever version builds best.
+  // Exotic class items are always listed (from the manifest) even when unowned.
   const exotics = useMemo(() => {
     const map = new Map<string, { hashes: number[]; icon?: string }>();
     for (const p of pool) {
@@ -381,10 +394,88 @@ export function BuilderPanel({
       if (!entry.icon) entry.icon = p.icon;
       map.set(p.name, entry);
     }
+    if (manifest && classType !== null) {
+      for (const item of availableExoticClassItems(manifest, classType)) {
+        const entry = map.get(item.name) ?? { hashes: [], icon: item.icon };
+        if (!entry.hashes.includes(item.hash)) entry.hashes.push(item.hash);
+        if (!entry.icon) entry.icon = item.icon;
+        map.set(item.name, entry);
+      }
+    }
     return [...map]
       .map(([name, { hashes, icon }]) => ({ name, hashes, icon }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [pool]);
+  }, [pool, manifest, classType]);
+
+  const selectedExoticOption =
+    selectedExotic !== null ? exotics[selectedExotic] : undefined;
+  const selectedClassItemHash = selectedExoticOption?.hashes.find(
+    isExoticClassItemHash,
+  );
+  const spiritPerks = useMemo(
+    () =>
+      manifest && selectedClassItemHash !== undefined
+        ? availableSpiritPerks(manifest, selectedClassItemHash)
+        : null,
+    [manifest, selectedClassItemHash],
+  );
+
+  const pieceMap = useMemo(() => {
+    const map = new Map(classPieces.map((p) => [p.instanceId, p]));
+    // Theoretical exotic class item roll — results resolve pieceIds through this map.
+    if (
+      manifest &&
+      classType !== null &&
+      selectedClassItemHash !== undefined &&
+      exoticPerks[0] !== null &&
+      exoticPerks[1] !== null
+    ) {
+      const ownedMatch = classPieces.some(
+        (p) =>
+          p.isExotic &&
+          p.slot === "classItem" &&
+          matchesSpiritSelection(p.exoticPerkHashes, exoticPerks),
+      );
+      if (!ownedMatch) {
+        const base = synthesizeClassItemBaseStats(
+          manifest,
+          exoticPerks[0],
+          exoticPerks[1],
+        );
+        const stats = synthesizeClassItemStats(
+          manifest,
+          exoticPerks[0],
+          exoticPerks[1],
+        );
+        if (base && stats) {
+          const synthId = `${SYNTHETIC_CLASS_ITEM_ID_PREFIX}${selectedClassItemHash}:${exoticPerks[0]}:${exoticPerks[1]}`;
+          map.set(synthId, {
+            instanceId: synthId,
+            itemHash: selectedClassItemHash,
+            name: selectedExoticOption?.name ?? "Exotic class item",
+            icon: selectedExoticOption?.icon,
+            slot: "classItem",
+            classType,
+            isExotic: true,
+            isArtifice: false,
+            baseStats: base,
+            stats,
+            tunedStat: 0,
+            exoticPerkHashes: [exoticPerks[0], exoticPerks[1]],
+            location: "vault",
+          });
+        }
+      }
+    }
+    return map;
+  }, [
+    classPieces,
+    manifest,
+    classType,
+    selectedClassItemHash,
+    selectedExoticOption,
+    exoticPerks,
+  ]);
 
   // Resolve the restored exotic (persisted by name) to an index once the live list exists.
   // Consumed once so a later class switch can't re-apply it; not-owned-now → cleared.
@@ -410,6 +501,7 @@ export function BuilderPanel({
         setFilters,
         exoticName:
           selectedExotic === null ? null : (exotics[selectedExotic]?.name ?? null),
+        exoticPerks,
         allowTuning,
         legacyExotics: useLegacyExotics,
         activeSubclass,
@@ -426,6 +518,7 @@ export function BuilderPanel({
     setFilters,
     selectedExotic,
     exotics,
+    exoticPerks,
     allowTuning,
     useLegacyExotics,
     activeSubclass,
@@ -434,24 +527,88 @@ export function BuilderPanel({
 
   const runOptimizer = useCallback(() => {
     if (classType === null) return;
-    const slots = ARMOR_SLOTS.map((slot) =>
-      pool
-        .filter((p) => p.slot === slot)
-        .map((p) => ({
-          id: p.instanceId,
-          stats: p.stats,
-          exotic: p.isExotic,
-          hash: p.itemHash,
-          setHash: p.setHash,
-          // Artifice is legacy-only, tuning Tier-5-only; enforce the exclusivity here
-          // (the solver stays general, the results UI shares one column for both).
-          artifice: p.isArtifice && p.tunedStat === undefined,
-          tuning:
-            p.tunedStat !== undefined
-              ? { tuned: p.tunedStat, offStats: offArchetypeIndices(p.baseStats) }
-              : undefined,
-        })),
-    );
+
+    const toOpt = (p: ArmorPiece): OptimizerPiece => ({
+      id: p.instanceId,
+      stats: p.stats,
+      exotic: p.isExotic,
+      hash: p.itemHash,
+      setHash: p.setHash,
+      // Artifice is legacy-only, tuning Tier-5-only; enforce the exclusivity here
+      // (the solver stays general, the results UI shares one column for both).
+      artifice: p.isArtifice && p.tunedStat === undefined,
+      tuning:
+        p.tunedStat !== undefined
+          ? { tuned: p.tunedStat, offStats: offArchetypeIndices(p.baseStats) }
+          : undefined,
+    });
+
+    const slots = ARMOR_SLOTS.map((slot) => {
+      let pieces = pool.filter((p) => p.slot === slot);
+
+      // Exotic class item Spirit filter + theoretical synthesis.
+      if (
+        slot === "classItem" &&
+        selectedClassItemHash !== undefined &&
+        (exoticPerks[0] !== null || exoticPerks[1] !== null)
+      ) {
+        const matching = pieces.filter(
+          (p) =>
+            p.isExotic &&
+            matchesSpiritSelection(p.exoticPerkHashes, exoticPerks),
+        );
+        pieces = [
+          ...pieces.filter((p) => !p.isExotic),
+          ...matching,
+        ];
+
+        // Concrete pair with no owned match → inject a synthetic roll.
+        if (
+          matching.length === 0 &&
+          exoticPerks[0] !== null &&
+          exoticPerks[1] !== null &&
+          manifest
+        ) {
+          const base = synthesizeClassItemBaseStats(
+            manifest,
+            exoticPerks[0],
+            exoticPerks[1],
+          );
+          const stats = synthesizeClassItemStats(
+            manifest,
+            exoticPerks[0],
+            exoticPerks[1],
+          );
+          if (base && stats) {
+            const synthId = `${SYNTHETIC_CLASS_ITEM_ID_PREFIX}${selectedClassItemHash}:${exoticPerks[0]}:${exoticPerks[1]}`;
+            pieces = [
+              ...pieces,
+              {
+                instanceId: synthId,
+                itemHash: selectedClassItemHash,
+                name:
+                  selectedExoticOption?.name ??
+                  "Exotic class item",
+                icon: selectedExoticOption?.icon,
+                slot: "classItem",
+                classType,
+                isExotic: true,
+                isArtifice: false,
+                baseStats: base,
+                stats,
+                // Flexible exotic tuning — any +5 direction (same as owned T5 exotics).
+                tunedStat: 0,
+                exoticPerkHashes: [exoticPerks[0], exoticPerks[1]],
+                location: "vault",
+              },
+            ];
+          }
+        }
+      }
+
+      return pieces.map(toOpt);
+    });
+
     const exotic: ExoticConstraint =
       selectedExotic === null
         ? { mode: "any" }
@@ -474,6 +631,10 @@ export function BuilderPanel({
     setRequirements,
     selectedExotic,
     exotics,
+    selectedClassItemHash,
+    selectedExoticOption,
+    exoticPerks,
+    manifest,
     allowTuning,
     fragmentBonus,
     run,
@@ -498,6 +659,12 @@ export function BuilderPanel({
     setClassType(next);
     setSetReqs({});
     setSelectedExotic(null);
+    setExoticPerks([null, null]);
+  };
+
+  const onExoticSelect = (index: number | null) => {
+    setSelectedExotic(index);
+    setExoticPerks([null, null]);
   };
 
   const setSetFilter = (key: keyof SetFilters, value: boolean) =>
@@ -795,8 +962,19 @@ export function BuilderPanel({
               <ExoticPicker
                 options={exotics}
                 selected={selectedExotic}
-                onSelect={setSelectedExotic}
+                onSelect={onExoticSelect}
               />
+              {spiritPerks && (
+                <div className="mt-3">
+                  <ExoticClassPerkPicker
+                    left={spiritPerks.left}
+                    right={spiritPerks.right}
+                    selected={exoticPerks}
+                    onChange={setExoticPerks}
+                    statIcons={statIcons}
+                  />
+                </div>
+              )}
             </Section>
 
             <Section>

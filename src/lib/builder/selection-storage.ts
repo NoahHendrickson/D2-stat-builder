@@ -27,6 +27,11 @@ export interface PersistedSelections {
   /** Armor-set list display settings (ownership / piece-count toggles). */
   setFilters: SetFilters;
   exoticName: string | null;
+  /**
+   * Exotic class item Spirit selection: [left, right]. `null` in a column = Any.
+   * Absent / ignored when the selected exotic is not a class item.
+   */
+  exoticPerks: [number | null, number | null];
   allowTuning: boolean;
   /** Include legacy (Armor 2.0 / non-tunable) exotics in the optimizer pool. */
   legacyExotics: boolean;
@@ -139,6 +144,8 @@ function parse(raw: string | null): PersistedSelections | null {
   // Optional (added after v1 shipped) — older stored blobs won't have it. Default ON.
   const legacyExotics =
     typeof o.legacyExotics === "boolean" ? o.legacyExotics : true;
+  // Optional — exotic class item Spirit pair; default Any/Any.
+  const exoticPerks = parseExoticPerks(o.exoticPerks);
   if (typeof o.activeSubclass !== "string" || !SUBCLASS_SET.has(o.activeSubclass))
     return null;
   if (typeof o.fragSel !== "object" || o.fragSel === null) return null;
@@ -163,11 +170,20 @@ function parse(raw: string | null): PersistedSelections | null {
     pinnedSets,
     setFilters,
     exoticName: o.exoticName as string | null,
+    exoticPerks,
     allowTuning: o.allowTuning as boolean,
     legacyExotics,
     activeSubclass: o.activeSubclass as Subclass,
     fragSel,
   };
+}
+
+/** `[left, right]` Spirit hashes; `null` = Any. Malformed / absent → Any/Any. */
+function parseExoticPerks(v: unknown): [number | null, number | null] {
+  if (!Array.isArray(v) || v.length !== 2) return [null, null];
+  const left = v[0] === null || typeof v[0] === "number" ? v[0] : null;
+  const right = v[1] === null || typeof v[1] === "number" ? v[1] : null;
+  return [left, right];
 }
 
 /** Read the stored selections, or null if absent / unreadable / stale / corrupt. */
