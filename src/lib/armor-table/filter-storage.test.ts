@@ -48,11 +48,18 @@ function sampleState(): PersistedTableState {
       tertiaries: [3],
       armorVersions: ["3.0"],
     },
-    sort: { key: "stat-super", asc: false },
+    sort: [
+      {
+        key: "archetype",
+        kind: "custom",
+        order: ["Powerhouse", "Gunner"],
+      },
+      { key: "stat-super", kind: "dir", asc: false },
+    ],
   };
 }
 
-test("round-trips a full state", () => {
+test("round-trips a full v4 state", () => {
   saveTableState(sampleState());
   expect(loadTableState()).toEqual(sampleState());
 });
@@ -74,12 +81,12 @@ test("drops invalid entries and falls back to defaults", () => {
     JSON.stringify({
       version: TABLE_SCHEMA_VERSION,
       filters: {
-        search: 7, // wrong type
+        search: 7,
         classes: [1, "x"],
         armorVersions: ["3.0", "4.0"],
         tunings: [2, "sometimes"],
       },
-      sort: { key: "not-a-column", asc: true },
+      sort: [{ key: "not-a-column", kind: "dir", asc: true }],
     }),
   );
   expect(loadTableState()).toEqual({
@@ -90,8 +97,71 @@ test("drops invalid entries and falls back to defaults", () => {
       armorVersions: ["3.0"],
       tunings: [2],
     },
-    sort: { key: "name", asc: true },
+    sort: [{ key: "name", kind: "dir", asc: true }],
   });
+});
+
+test("round-trips an explicit empty (unsorted) sort", () => {
+  const state = { ...sampleState(), sort: [] };
+  saveTableState(state);
+  expect(loadTableState()).toEqual(state);
+});
+
+test("migrates v3 chain + customOrders into union levels", () => {
+  localStorage.setItem(
+    TABLE_STATE_KEY,
+    JSON.stringify({
+      version: 3,
+      filters: emptyFilters(),
+      sort: [
+        { key: "archetype", asc: true },
+        { key: "stat-super", asc: false },
+      ],
+      customOrders: { archetype: ["Powerhouse", "Gunner"] },
+    }),
+  );
+  expect(loadTableState()).toEqual({
+    version: TABLE_SCHEMA_VERSION,
+    filters: emptyFilters(),
+    sort: [
+      {
+        key: "archetype",
+        kind: "custom",
+        order: ["Powerhouse", "Gunner"],
+      },
+      { key: "stat-super", kind: "dir", asc: false },
+    ],
+  });
+});
+
+test("migrates v2 single-object sort into a one-element chain", () => {
+  localStorage.setItem(
+    TABLE_STATE_KEY,
+    JSON.stringify({
+      version: 2,
+      filters: emptyFilters(),
+      sort: { key: "stat-super", asc: false },
+      customOrders: {},
+    }),
+  );
+  expect(loadTableState()).toEqual({
+    version: TABLE_SCHEMA_VERSION,
+    filters: emptyFilters(),
+    sort: [{ key: "stat-super", kind: "dir", asc: false }],
+  });
+});
+
+test("migrates v2 null sort to an empty chain", () => {
+  localStorage.setItem(
+    TABLE_STATE_KEY,
+    JSON.stringify({
+      version: 2,
+      filters: emptyFilters(),
+      sort: null,
+      customOrders: {},
+    }),
+  );
+  expect(loadTableState()?.sort).toEqual([]);
 });
 
 test("falls back to default sort when saved sort key was removed", () => {
@@ -100,8 +170,29 @@ test("falls back to default sort when saved sort key was removed", () => {
     JSON.stringify({
       version: TABLE_SCHEMA_VERSION,
       filters: emptyFilters(),
-      sort: { key: "slot", asc: false },
+      sort: [{ key: "slot", kind: "dir", asc: false }],
     }),
   );
-  expect(loadTableState()?.sort).toEqual({ key: "name", asc: true });
+  expect(loadTableState()?.sort).toEqual([
+    { key: "name", kind: "dir", asc: true },
+  ]);
+});
+
+test("dedupes duplicate keys in a nest chain", () => {
+  localStorage.setItem(
+    TABLE_STATE_KEY,
+    JSON.stringify({
+      version: TABLE_SCHEMA_VERSION,
+      filters: emptyFilters(),
+      sort: [
+        { key: "archetype", kind: "dir", asc: true },
+        { key: "archetype", kind: "dir", asc: false },
+        { key: "name", kind: "dir", asc: true },
+      ],
+    }),
+  );
+  expect(loadTableState()?.sort).toEqual([
+    { key: "archetype", kind: "dir", asc: true },
+    { key: "name", kind: "dir", asc: true },
+  ]);
 });

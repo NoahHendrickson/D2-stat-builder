@@ -120,12 +120,37 @@ export type ColumnKey =
 /** Stat columns are namespaced ("stat-class") so they can't collide with the class column. */
 export type SortKey = ColumnKey | `stat-${StatKey}`;
 
-export interface SortState {
-  key: SortKey;
-  asc: boolean;
+/** Columns whose values users can custom-order (categorical text columns). */
+export const CUSTOM_ORDER_COLUMNS = [
+  "class",
+  "archetype",
+  "tertiary",
+  "tuned",
+  "set",
+] as const;
+
+export type CustomOrderColumn = (typeof CUSTOM_ORDER_COLUMNS)[number];
+
+export function isCustomOrderColumn(key: SortKey): key is CustomOrderColumn {
+  return (CUSTOM_ORDER_COLUMNS as readonly string[]).includes(key);
 }
 
-export const DEFAULT_SORT: SortState = { key: "name", asc: true };
+/** One level in a nestable sort chain — direction or custom value order. */
+export type SortLevel =
+  | { key: SortKey; kind: "dir"; asc: boolean }
+  | { key: CustomOrderColumn; kind: "custom"; order: string[] };
+
+/** Ordered nest chain (primary → nested → …); empty = unsorted. */
+export type SortState = SortLevel[];
+
+export const DEFAULT_SORT: SortState = [
+  { key: "name", kind: "dir", asc: true },
+];
+
+/** Ascending direction for a level (custom is always top-to-bottom). */
+export function sortLevelAsc(level: SortLevel): boolean {
+  return level.kind === "custom" ? true : level.asc;
+}
 
 const COLUMN_KEYS: ColumnKey[] = [
   "name",

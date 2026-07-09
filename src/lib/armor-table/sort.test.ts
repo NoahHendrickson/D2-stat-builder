@@ -1,9 +1,19 @@
 import { test, expect } from "vitest";
-import { compareRows, sortValue, type SortableRow } from "./sort";
+import {
+  activeSortMode,
+  applySortAction,
+  clearSortLevel,
+  compareRows,
+  isStatSortKey,
+  moveOrderItem,
+  preferredAsc,
+  reorderCustomLevel,
+  sortValue,
+  type SortableRow,
+} from "./sort";
 
 const row = (over: {
   name?: string;
-  slot?: SortableRow["piece"]["slot"];
   stats?: number[];
   archetype?: string;
   tertiary?: number;
@@ -12,8 +22,6 @@ const row = (over: {
   piece: {
     name: over.name ?? "Test Piece",
     classType: 1,
-    slot: over.slot ?? "helmet",
-    location: "vault",
     stats: over.stats ?? [10, 10, 10, 10, 10, 10],
     archetype: over.archetype,
   },
@@ -30,23 +38,184 @@ test("sortValue reads stat columns by STAT_ORDER index", () => {
 test("compareRows sorts numbers numerically and flips with direction", () => {
   const lo = row({ stats: [5, 0, 0, 0, 0, 0] });
   const hi = row({ stats: [30, 0, 0, 0, 0, 0] });
-  expect(compareRows(lo, hi, { key: "stat-weapons", asc: true })).toBeLessThan(0);
-  expect(compareRows(lo, hi, { key: "stat-weapons", asc: false })).toBeGreaterThan(0);
+  expect(
+    compareRows(lo, hi, [{ key: "stat-weapons", kind: "dir", asc: true }]),
+  ).toBeLessThan(0);
+  expect(
+    compareRows(lo, hi, [{ key: "stat-weapons", kind: "dir", asc: false }]),
+  ).toBeGreaterThan(0);
 });
 
 test("compareRows puts missing values last in both directions", () => {
   const has = row({ archetype: "Gunner" });
   const missing = row({});
-  expect(compareRows(missing, has, { key: "archetype", asc: true })).toBeGreaterThan(0);
-  expect(compareRows(missing, has, { key: "archetype", asc: false })).toBeGreaterThan(0);
-  expect(compareRows(missing, missing, { key: "archetype", asc: true })).toBe(0);
+  expect(
+    compareRows(missing, has, [{ key: "archetype", kind: "dir", asc: true }]),
+  ).toBeGreaterThan(0);
+  expect(
+    compareRows(missing, has, [{ key: "archetype", kind: "dir", asc: false }]),
+  ).toBeGreaterThan(0);
+  expect(
+    compareRows(missing, missing, [
+      { key: "archetype", kind: "dir", asc: true },
+    ]),
+  ).toBe(0);
 });
 
 test("compareRows sorts tertiary by stat label", () => {
-  // STAT_ORDER: weapons(0), grenade(3) → labels "Weapons" vs "Grenade"
   const weapons = row({ tertiary: 0 });
   const grenade = row({ tertiary: 3 });
   expect(
-    compareRows(grenade, weapons, { key: "tertiary", asc: true }),
+    compareRows(grenade, weapons, [
+      { key: "tertiary", kind: "dir", asc: true },
+    ]),
   ).toBeLessThan(0);
+});
+
+test("preferredAsc is ascending for text columns and descending for stats", () => {
+  expect(preferredAsc("name")).toBe(true);
+  expect(preferredAsc("stat-weapons")).toBe(false);
+});
+
+test("isStatSortKey distinguishes stat columns from text columns", () => {
+  expect(isStatSortKey("stat-weapons")).toBe(true);
+  expect(isStatSortKey("name")).toBe(false);
+  expect(isStatSortKey("class")).toBe(false);
+});
+
+test("activeSortMode reads kind from the level itself", () => {
+  expect(activeSortMode([], "name")).toBeNull();
+  expect(
+    activeSortMode([{ key: "name", kind: "dir", asc: true }], "name"),
+  ).toBe("asc");
+  expect(
+    activeSortMode([{ key: "name", kind: "dir", asc: false }], "name"),
+  ).toBe("desc");
+  expect(
+    activeSortMode([{ key: "name", kind: "dir", asc: true }], "class"),
+  ).toBeNull();
+  expect(
+    activeSortMode(
+      [{ key: "archetype", kind: "custom", order: ["Powerhouse", "Gunner"] }],
+      "archetype",
+    ),
+  ).toBe("custom");
+});
+
+test("applySortAction replaces, nests, or updates in place atomically", () => {
+  expect(applySortAction([], "name", "asc", false)).toEqual({
+    sort: [{ key: "name", kind: "dir", asc: true }],
+  });
+  expect(
+    applySortAction(
+      [{ key: "name", kind: "dir", asc: true }],
+      "archetype",
+      "desc",
+      false,
+    ),
+  ).toEqual({
+    sort: [{ key: "archetype", kind: "dir", asc: false }],
+    discardedChain: [{ key: "name", kind: "dir", asc: true }],
+  });
+  expect(
+    applySortAction(
+      [{ key: "name", kind: "dir", asc: true }],
+      "archetype",
+      "asc",
+      true,
+    ),
+  ).toEqual({
+    sort: [
+      { key: "name", kind: "dir", asc: true },
+      { key: "archetype", kind: "dir", asc: true },
+    ],
+  });
+  expect(
+    applySortAction(
+      [
+        { key: "name", kind: "dir", asc: true },
+        { key: "archetype", kind: "dir", asc: true },
+      ],
+      "archetype",
+      "custom",
+      true,
+      ["Powerhouse", "Gunner"],
+    ),
+  ).toEqual({
+    sort: [
+      { key: "name", kind: "dir", asc: true },
+      {
+        key: "archetype",
+        kind: "custom",
+        order: ["Powerhouse", "Gunner"],
+      },
+    ],
+  });
+});
+
+test("clearSortLevel drops one column and snapshots the prior chain", () => {
+  const chain = [
+    { key: "archetype" as const, kind: "dir" as const, asc: true },
+    { key: "tertiary" as const, kind: "dir" as const, asc: true },
+    { key: "name" as const, kind: "dir" as const, asc: true },
+  ];
+  expect(clearSortLevel(chain, "tertiary")).toEqual({
+    sort: [
+      { key: "archetype", kind: "dir", asc: true },
+      { key: "name", kind: "dir", asc: true },
+    ],
+    discardedChain: chain,
+  });
+});
+
+test("moveOrderItem reorders by moving from → to", () => {
+  expect(moveOrderItem(["a", "b", "c"], 0, 2)).toEqual(["b", "c", "a"]);
+  expect(moveOrderItem(["a", "b", "c"], 2, 0)).toEqual(["c", "a", "b"]);
+  expect(moveOrderItem(["a", "b", "c"], 1, 1)).toEqual(["a", "b", "c"]);
+});
+
+test("reorderCustomLevel updates only that custom level", () => {
+  const sort = [
+    { key: "archetype" as const, kind: "custom" as const, order: ["a", "b", "c"] },
+    { key: "name" as const, kind: "dir" as const, asc: true },
+  ];
+  expect(reorderCustomLevel(sort, "archetype", 0, 2)).toEqual([
+    { key: "archetype", kind: "custom", order: ["b", "c", "a"] },
+    { key: "name", kind: "dir", asc: true },
+  ]);
+});
+
+test("compareRows follows a custom value order on the level", () => {
+  const gunner = row({ archetype: "Gunner" });
+  const powerhouse = row({ archetype: "Powerhouse" });
+  const sort = [
+    {
+      key: "archetype" as const,
+      kind: "custom" as const,
+      order: ["Powerhouse", "Gunner"],
+    },
+  ];
+  expect(
+    compareRows(gunner, powerhouse, [
+      { key: "archetype", kind: "dir", asc: true },
+    ]),
+  ).toBeLessThan(0);
+  expect(compareRows(gunner, powerhouse, sort)).toBeGreaterThan(0);
+});
+
+test("compareRows walks nest levels until a tie breaks", () => {
+  const a = row({ archetype: "Gunner", tertiary: 0, name: "A" });
+  const b = row({ archetype: "Gunner", tertiary: 3, name: "B" });
+  const c = row({ archetype: "Powerhouse", tertiary: 0, name: "C" });
+  const sort = [
+    {
+      key: "archetype" as const,
+      kind: "custom" as const,
+      order: ["Powerhouse", "Gunner"],
+    },
+    { key: "tertiary" as const, kind: "dir" as const, asc: true },
+  ];
+  expect(compareRows(c, a, sort)).toBeLessThan(0);
+  expect(compareRows(b, a, sort)).toBeLessThan(0);
+  expect(compareRows(a, b, [])).toBe(0);
 });
