@@ -76,8 +76,8 @@ export function SortMenu({
   onReorderCustom: (key: CustomOrderColumn, from: number, to: number) => void;
   onUndoSort: () => void;
 }) {
-  // Default on so a stray tab click nests instead of wiping an existing chain.
-  const [nest, setNest] = useState(true);
+  // Default off so picking a new column replaces the chain; nest is opt-in.
+  const [nest, setNest] = useState(false);
   const accessibleLabel = title ?? label;
   const levelIndex = sort.findIndex((l) => l.key === sortKey);
   const active = levelIndex !== -1;
@@ -133,7 +133,7 @@ export function SortMenu({
     >
       <Popover
         onOpenChange={(open) => {
-          if (open) setNest(true);
+          if (open) setNest(false);
         }}
       >
         <PopoverTrigger
