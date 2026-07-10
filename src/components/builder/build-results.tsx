@@ -1,6 +1,12 @@
 "use client";
 
-import { Fragment, memo, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  memo,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import Image from "next/image";
 import {
   ArrowSquareOut,
@@ -8,6 +14,8 @@ import {
   CheckCircle,
   CircleNotch,
   Copy,
+  SortAscending,
+  SortDescending,
 } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
@@ -22,6 +30,13 @@ import {
   STAT_ORDER,
   type StatIconMap,
 } from "@/lib/armory/stats";
+import {
+  DEFAULT_LOADOUT_SORT,
+  LOADOUT_SORT_OPTIONS,
+  sortLoadouts,
+  type LoadoutSortKey,
+  type LoadoutSortState,
+} from "@/lib/builder/sort-loadouts";
 import type { StatModHashes } from "@/lib/dim/mod-hashes";
 import {
   buildDimLoadout,
@@ -30,6 +45,13 @@ import {
 } from "@/lib/dim/loadout-link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { BUNGIE_IMAGE_BASE } from "@/lib/bungie/constants";
 import {
@@ -713,6 +735,68 @@ function SearchStatus({
   }
 }
 
+function isLoadoutSortKey(value: string): value is LoadoutSortKey {
+  return (
+    value === "total" ||
+    (STAT_ORDER as readonly string[]).includes(value)
+  );
+}
+
+/** Compact sort-by control for the results list (key select + high/low toggle). */
+function LoadoutSortControls({
+  sort,
+  onChange,
+}: {
+  sort: LoadoutSortState;
+  onChange: (next: LoadoutSortState) => void;
+}) {
+  const items: Record<string, ReactNode> = {};
+  for (const opt of LOADOUT_SORT_OPTIONS) {
+    items[opt.key] = opt.label;
+  }
+  const DirectionIcon = sort.asc ? SortAscending : SortDescending;
+  const directionLabel = sort.asc ? "Low to high" : "High to low";
+
+  return (
+    <div className="flex items-center justify-end gap-1.5">
+      <span className="text-muted-foreground text-xs">Sort</span>
+      <Select
+        items={items}
+        value={sort.key}
+        onValueChange={(v) => {
+          if (v == null || !isLoadoutSortKey(v)) return;
+          onChange({ ...sort, key: v });
+        }}
+      >
+        <SelectTrigger
+          size="sm"
+          className="min-w-28"
+          aria-label="Sort builds by"
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent align="end">
+          {LOADOUT_SORT_OPTIONS.map((opt) => (
+            <SelectItem key={opt.key} value={opt.key}>
+              {opt.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label={directionLabel}
+        title={directionLabel}
+        onClick={() => onChange({ ...sort, asc: !sort.asc })}
+      >
+        <DirectionIcon weight="duotone" />
+      </Button>
+    </div>
+  );
+}
+
 export function BuildResults({
   result,
   refinement,
@@ -738,6 +822,11 @@ export function BuildResults({
   statIcons: StatIconMap;
   balancedTuningIcon?: string;
 } & BuildActionProps) {
+  const [sort, setSort] = useState<LoadoutSortState>(DEFAULT_LOADOUT_SORT);
+  const sortedLoadouts = useMemo(
+    () => sortLoadouts(result.loadouts, sort),
+    [result.loadouts, sort],
+  );
   const status = (
     <SearchStatus
       capped={result.capped}
@@ -765,10 +854,11 @@ export function BuildResults({
   return (
     <div className="space-y-3">
       {status}
+      <LoadoutSortControls sort={sort} onChange={setSort} />
       <div className="space-y-1.5">
-        {result.loadouts.slice(0, MAX_SHOWN).map((loadout, idx) => (
+        {sortedLoadouts.slice(0, MAX_SHOWN).map((loadout) => (
           <BuildRow
-            key={idx}
+            key={loadout.pieceIds.join("|")}
             loadout={loadout}
             pieceMap={pieceMap}
             setMap={setMap}
