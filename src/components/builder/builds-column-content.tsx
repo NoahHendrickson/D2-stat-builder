@@ -1,8 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   BuildResults,
+  LoadoutSortControls,
   MAX_SHOWN,
   type DimSubclassInput,
 } from "@/components/builder/build-results";
@@ -10,6 +12,10 @@ import type { ArmorPiece } from "@/lib/armory/normalize";
 import type { ArmorSetInfo } from "@/lib/armory/sets";
 import type { ArmoryCharacter } from "@/lib/armory/fetch";
 import type { StatIconMap } from "@/lib/armory/stats";
+import {
+  DEFAULT_LOADOUT_SORT,
+  type LoadoutSortState,
+} from "@/lib/builder/sort-loadouts";
 import type { StatModHashes } from "@/lib/dim/mod-hashes";
 import type { OptimizerOutput, RefinementState } from "@/lib/optimizer/types";
 
@@ -111,16 +117,18 @@ export function BuildsColumnContent({
   subclass,
   onEquipped,
 }: BuildsColumnContentProps) {
+  const [sort, setSort] = useState<LoadoutSortState>(DEFAULT_LOADOUT_SORT);
+  const viewState = getBuildsViewState({ ready, showLoading, result });
   const statusLabel = getBuildsStatusLabel({ ready, showLoading, result });
+  const showSort = viewState === "results";
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex items-center gap-3">
         <h2 className="text-lg font-medium">Builds</h2>
-        <div className="flex items-center gap-3">
-          {/* Also offered during background refinement — that's when the worker burns
-              the most CPU and running is already false. */}
-          {(running || refinement.phase === "running") && (
+        <div className="ml-auto flex min-w-0 items-center gap-3">
+          {/* Initial search only — background refinement Cancel lives in the alert. */}
+          {running && refinement.phase !== "running" && (
             <Button
               variant="link"
               onClick={onCancel}
@@ -135,6 +143,7 @@ export function BuildsColumnContent({
           >
             {statusLabel}
           </span>
+          {showSort && <LoadoutSortControls sort={sort} onChange={setSort} />}
         </div>
       </div>
       {!ready ? (
@@ -148,6 +157,7 @@ export function BuildsColumnContent({
           result={result}
           refinement={refinement}
           onShowPending={onShowPending}
+          onCancel={onCancel}
           pieceMap={pieceMap}
           targets={targets}
           setMap={setMap}
@@ -159,6 +169,7 @@ export function BuildsColumnContent({
           artificeModHashes={artificeModHashes}
           subclass={subclass}
           onEquipped={onEquipped}
+          sort={sort}
         />
       ) : (
         <p className="text-muted-foreground text-sm">

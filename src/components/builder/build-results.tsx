@@ -3,19 +3,21 @@
 import {
   Fragment,
   memo,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from "react";
 import Image from "next/image";
 import {
+  ArrowDown,
   ArrowSquareOut,
+  ArrowUp,
   CaretDown,
   CheckCircle,
   CircleNotch,
   Copy,
-  SortAscending,
-  SortDescending,
+  X,
 } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
@@ -31,10 +33,9 @@ import {
   type StatIconMap,
 } from "@/lib/armory/stats";
 import {
-  DEFAULT_LOADOUT_SORT,
   LOADOUT_SORT_OPTIONS,
+  loadoutSortLabel,
   sortLoadouts,
-  type LoadoutSortKey,
   type LoadoutSortState,
 } from "@/lib/builder/sort-loadouts";
 import type { StatModHashes } from "@/lib/dim/mod-hashes";
@@ -45,13 +46,12 @@ import {
 } from "@/lib/dim/loadout-link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Menu } from "@/components/ui/menu";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  field3dFocusVisibleClasses,
+  field3dInteractiveClasses,
+  field3dSurfaceClasses,
+} from "@/lib/field-surface";
 import { cn } from "@/lib/utils";
 import { BUNGIE_IMAGE_BASE } from "@/lib/bungie/constants";
 import {
@@ -617,11 +617,21 @@ function SearchStatus({
   capped,
   refinement,
   onShowPending,
+  onCancel,
 }: {
   capped: boolean;
   refinement: RefinementState;
   onShowPending: () => void;
+  onCancel: () => void;
 }) {
+  const [improvedDismissed, setImprovedDismissed] = useState(false);
+  const showImproved =
+    refinement.phase === "done" && refinement.outcome === "improved";
+  // Reset dismiss when a new refinement cycle starts (or the improved card goes away).
+  useEffect(() => {
+    if (!showImproved) setImprovedDismissed(false);
+  }, [showImproved]);
+
   const cappedBanner = capped ? (
     <p className="text-xs text-amber-600/90 dark:text-amber-500/90">
       Hit the time limit — showing the best found so far. Narrow your targets
@@ -644,7 +654,7 @@ function SearchStatus({
             className="size-4 shrink-0 animate-spin text-primary"
             aria-hidden
           />
-          <p className="text-foreground/90 text-sm">
+          <p className="text-foreground/90 min-w-0 flex-1 text-sm">
             {refinement.interim.capped ? (
               <>
                 <span className="font-medium">First pass done</span> — searching
@@ -660,6 +670,13 @@ function SearchStatus({
             )}
             {Math.round(refinement.progress * 100)}%)
           </p>
+          <Button
+            variant="link"
+            onClick={onCancel}
+            className="text-muted-foreground hover:text-foreground h-auto shrink-0 p-0 text-xs font-normal"
+          >
+            Cancel
+          </Button>
         </div>
       );
     case "done": {
@@ -683,7 +700,7 @@ function SearchStatus({
           </p>,
         );
       }
-      if (outcome === "improved") {
+      if (outcome === "improved" && !improvedDismissed) {
         // The running card resolves into this — same alert footprint, green with a
         // check instead of the spinner, so completion reads as the card finishing
         // rather than the status vanishing.
@@ -698,10 +715,20 @@ function SearchStatus({
               className="size-4 shrink-0 text-emerald-600 dark:text-emerald-500"
               aria-hidden
             />
-            <p className="text-foreground/90 text-sm">
+            <p className="text-foreground/90 min-w-0 flex-1 text-sm">
               <span className="font-medium">Higher stat maximums found</span> —
               raise a stat target to explore them.
             </p>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Dismiss"
+              onClick={() => setImprovedDismissed(true)}
+              className="text-muted-foreground hover:text-foreground shrink-0"
+            >
+              <X weight="bold" className="size-3.5" aria-hidden />
+            </Button>
           </div>,
         );
       } else if (outcome === "confirmed" && !pending) {
@@ -735,65 +762,104 @@ function SearchStatus({
   }
 }
 
-function isLoadoutSortKey(value: string): value is LoadoutSortKey {
-  return (
-    value === "total" ||
-    (STAT_ORDER as readonly string[]).includes(value)
-  );
-}
-
-/** Compact sort-by control for the results list (key select + high/low toggle). */
-function LoadoutSortControls({
+/** Compact sort control: each option has up/down arrows to set key + direction. */
+export function LoadoutSortControls({
   sort,
   onChange,
 }: {
   sort: LoadoutSortState;
   onChange: (next: LoadoutSortState) => void;
 }) {
-  const items: Record<string, ReactNode> = {};
-  for (const opt of LOADOUT_SORT_OPTIONS) {
-    items[opt.key] = opt.label;
-  }
-  const DirectionIcon = sort.asc ? SortAscending : SortDescending;
+  const DirectionIcon = sort.asc ? ArrowUp : ArrowDown;
   const directionLabel = sort.asc ? "Low to high" : "High to low";
+  const triggerLabel = loadoutSortLabel(sort.key);
 
   return (
-    <div className="flex items-center justify-end gap-1.5">
-      <span className="text-muted-foreground text-xs">Sort</span>
-      <Select
-        items={items}
-        value={sort.key}
-        onValueChange={(v) => {
-          if (v == null || !isLoadoutSortKey(v)) return;
-          onChange({ ...sort, key: v });
-        }}
+    <Menu.Root>
+      <Menu.Trigger
+        aria-label={`Sort by ${triggerLabel}, ${directionLabel}`}
+        className={cn(
+          "flex h-7 w-fit min-w-28 cursor-pointer items-center justify-between gap-1.5 rounded-[6px] border border-transparent bg-clip-padding py-2 pr-2 pl-2.5 text-[0.8rem] whitespace-nowrap outline-none select-none",
+          field3dSurfaceClasses,
+          field3dInteractiveClasses,
+          field3dFocusVisibleClasses,
+        )}
       >
-        <SelectTrigger
-          size="sm"
-          className="min-w-28"
-          aria-label="Sort builds by"
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent align="end">
-          {LOADOUT_SORT_OPTIONS.map((opt) => (
-            <SelectItem key={opt.key} value={opt.key}>
-              {opt.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label={directionLabel}
-        title={directionLabel}
-        onClick={() => onChange({ ...sort, asc: !sort.asc })}
-      >
-        <DirectionIcon weight="duotone" />
-      </Button>
-    </div>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate">{triggerLabel}</span>
+          <DirectionIcon
+            weight="bold"
+            className="size-4 shrink-0"
+            aria-hidden
+          />
+        </span>
+        <CaretDown
+          weight="duotone"
+          className="text-muted-foreground pointer-events-none size-3.5 shrink-0"
+          aria-hidden
+        />
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Positioner side="bottom" align="end">
+          <Menu.Popup className="min-w-40 p-1">
+            {LOADOUT_SORT_OPTIONS.map((opt) => {
+              const active = sort.key === opt.key;
+              return (
+                <div
+                  key={opt.key}
+                  className="flex items-center gap-0.5 rounded-md px-1 py-0.5"
+                >
+                  <span
+                    className={cn(
+                      "min-w-0 flex-1 truncate px-1.5 text-sm",
+                      active && "font-medium",
+                    )}
+                  >
+                    {opt.label}
+                  </span>
+                  <Menu.Item
+                    label={`${opt.label} low to high`}
+                    aria-label={`Sort by ${opt.label}, low to high`}
+                    aria-checked={active && sort.asc}
+                    className="size-7 justify-center gap-0 p-0"
+                    onClick={() => onChange({ key: opt.key, asc: true })}
+                  >
+                    <ArrowUp
+                      weight="bold"
+                      className={cn(
+                        "size-4",
+                        active && sort.asc
+                          ? "text-brand"
+                          : "text-muted-foreground",
+                      )}
+                      aria-hidden
+                    />
+                  </Menu.Item>
+                  <Menu.Item
+                    label={`${opt.label} high to low`}
+                    aria-label={`Sort by ${opt.label}, high to low`}
+                    aria-checked={active && !sort.asc}
+                    className="size-7 justify-center gap-0 p-0"
+                    onClick={() => onChange({ key: opt.key, asc: false })}
+                  >
+                    <ArrowDown
+                      weight="bold"
+                      className={cn(
+                        "size-4",
+                        active && !sort.asc
+                          ? "text-brand"
+                          : "text-muted-foreground",
+                      )}
+                      aria-hidden
+                    />
+                  </Menu.Item>
+                </div>
+              );
+            })}
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
   );
 }
 
@@ -801,6 +867,7 @@ export function BuildResults({
   result,
   refinement,
   onShowPending,
+  onCancel,
   pieceMap,
   targets,
   setMap,
@@ -812,17 +879,19 @@ export function BuildResults({
   artificeModHashes,
   subclass,
   onEquipped,
+  sort,
 }: {
   result: OptimizerOutput;
   refinement: RefinementState;
   onShowPending: () => void;
+  onCancel: () => void;
   pieceMap: Map<string, ArmorPiece>;
   targets: number[];
   setMap: Map<number, ArmorSetInfo>;
   statIcons: StatIconMap;
   balancedTuningIcon?: string;
+  sort: LoadoutSortState;
 } & BuildActionProps) {
-  const [sort, setSort] = useState<LoadoutSortState>(DEFAULT_LOADOUT_SORT);
   const sortedLoadouts = useMemo(
     () => sortLoadouts(result.loadouts, sort),
     [result.loadouts, sort],
@@ -832,6 +901,7 @@ export function BuildResults({
       capped={result.capped}
       refinement={refinement}
       onShowPending={onShowPending}
+      onCancel={onCancel}
     />
   );
   if (result.loadouts.length === 0) {
@@ -854,7 +924,6 @@ export function BuildResults({
   return (
     <div className="space-y-3">
       {status}
-      <LoadoutSortControls sort={sort} onChange={setSort} />
       <div className="space-y-1.5">
         {sortedLoadouts.slice(0, MAX_SHOWN).map((loadout) => (
           <BuildRow
