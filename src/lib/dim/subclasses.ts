@@ -58,3 +58,18 @@ export const FRAGMENT_SOCKET_START: Record<Subclass, number> = {
   Strand: 7,
   Prismatic: 9,
 };
+
+/** Reverse lookup: subclass item hash → Subclass. Built once from SUBCLASS_ITEM_HASHES. */
+const ITEM_HASH_TO_SUBCLASS: Map<number, Subclass> = (() => {
+  const m = new Map<number, Subclass>();
+  for (const subclass of Object.keys(SUBCLASS_ITEM_HASHES) as Subclass[]) {
+    for (const hash of Object.values(SUBCLASS_ITEM_HASHES[subclass])) {
+      m.set(hash, subclass);
+    }
+  }
+  return m;
+})();
+
+export function subclassFromItemHash(itemHash: number): Subclass | undefined {
+  return ITEM_HASH_TO_SUBCLASS.get(itemHash);
+}

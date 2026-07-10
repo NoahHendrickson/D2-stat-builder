@@ -89,6 +89,7 @@ import {
   FRAGMENT_SOCKET_START,
   SUBCLASS_ITEM_HASHES,
 } from "@/lib/dim/subclasses";
+import { useApplyCurrentFragments } from "@/lib/armory/use-apply-current-fragments";
 
 const MAX_MODS = 5;
 /** Clickable preset markers under each stat slider. */
@@ -369,6 +370,22 @@ export function BuilderPanel({
       else next.add(hash);
       return { ...prev, [activeSubclass]: next };
     });
+
+  const {
+    applying: applyingFragments,
+    apply: applyCurrentFragments,
+    canApply: canApplyCurrentFragments,
+  } = useApplyCurrentFragments({ armoryQuery, classType, fragments });
+
+  const onApplyCurrentFragments = async () => {
+    const result = await applyCurrentFragments();
+    if (!result) return;
+    setActiveSubclass(result.subclass);
+    setFragSel((prev) => ({
+      ...prev,
+      [result.subclass]: result.fragmentHashes,
+    }));
+  };
 
   const setRequirements = useMemo(
     () =>
@@ -982,6 +999,9 @@ export function BuilderPanel({
                   selected={fragSel[activeSubclass]}
                   onToggle={toggleFragment}
                   statIcons={statIcons}
+                  onApplyCurrent={() => void onApplyCurrentFragments()}
+                  applyDisabled={!canApplyCurrentFragments}
+                  applyLoading={applyingFragments}
                 />
               )}
             </Section>
