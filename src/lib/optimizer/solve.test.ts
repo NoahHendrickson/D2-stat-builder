@@ -164,12 +164,16 @@ describe("per-stat ceilings", () => {
       });
     const slots = [0, 1, 2, 3, 4].map((i) => bigSlot(`s${i}`));
     const start = performance.now();
+    // Explicit top-N cap: with the admissible (clamp-aware) upside bound this pool
+    // legitimately explores past the old sub-second walk — the guard here is that the
+    // deadline is honored, not that the walk finishes early.
     const out = solve(
       input(slots, { allowTuning: true, mods: { major: 1, minor: 4 }, minimums: [120, 100, 50, 0, 0, 0] }),
+      { topNBudgetMs: 1500 },
     );
     const ms = performance.now() - start;
     expect(out.ceilings).toHaveLength(6);
-    expect(ms).toBeLessThan(3000); // budget is 1200ms + the (fast) top-N search
+    expect(ms).toBeLessThan(3000); // 1500ms top-N cap + 1200ms ceiling budget + slack
   });
 });
 
@@ -806,11 +810,14 @@ describe("balanced tuning toggle (allowBalancedTuning)", () => {
       input(tunableSlots(), { ...cfg, minimums: [35, 0, 0, 0, 0, 0] }),
     );
     expect(at.loadouts.length).toBeGreaterThan(0);
+    // The −5 goes on an empty stat (clamped away — free), not on health (5 → 0),
+    // keeping the realized total at 40 instead of 35.
     expect(at.loadouts[0].tuning[0]).toEqual({
       kind: "directional",
       plus: 0,
-      minus: 1,
+      minus: 2,
     });
+    expect(at.loadouts[0].total).toBe(40);
     expect(
       solve(input(tunableSlots(), { ...cfg, minimums: [36, 0, 0, 0, 0, 0] }))
         .loadouts.length,
@@ -842,6 +849,66 @@ describe("balanced tuning toggle (allowBalancedTuning)", () => {
         input(slots(), { allowTuning: true, allowBalancedTuning: false, ...mins }),
       ).loadouts.length,
     ).toBe(0);
+  });
+});
+
+describe("top-N prune bound admissibility with min-forced directionals", () => {
+  const zero = (id: string) => piece(id, [0, 0, 0, 0, 0, 0]);
+  /**
+   * A directional's −5 can land on an empty stat and clamp away entirely, so its
+   * realized gain is the full +5 — more than the piece's tuning "upside" the prune
+   * bound credits. Setup: the untunable filler is enumerated first (higher base
+   * total) and fills the 1-slot heap; the tunable piece only wins via the
+   * minimum-forced directional. An inadmissible bound prices its subtree at or
+   * below the heap's worst and silently drops the true best loadout.
+   */
+  const raceSlots = (fillerStats: number[]): OptimizerPiece[][] => [
+    [
+      piece("filler", fillerStats),
+      {
+        id: "tuned",
+        stats: [10, 4, 0, 0, 0, 0],
+        exotic: false,
+        tuning: { tuned: 0, offStats: [1, 2, 3] },
+      },
+    ],
+    [zero("a")],
+    [zero("b")],
+    [zero("c")],
+    [zero("d")],
+  ];
+  // Minimum 15 weapons forces the +5 weapons directional on "tuned" (base 10);
+  // its −5 lands on an empty stat → realized [15, 4, 0…] = 19.
+  const mins = { minimums: [15, 0, 0, 0, 0, 0], maxResults: 1 };
+
+  test("balanced off: clamp-absorbed directional build survives the prune", () => {
+    const out = solve(
+      input(raceSlots([16, 0, 0, 0, 0, 0]), {
+        allowTuning: true,
+        allowBalancedTuning: false,
+        ...mins,
+      }),
+    );
+    expect(out.loadouts[0]?.pieceIds).toContain("tuned");
+    expect(out.loadouts[0]?.total).toBe(19);
+  });
+
+  test("balanced on: same guarantee (upside credit must cover the +5, not +3)", () => {
+    // Filler total 17 > base 14 + balanced credit 3, so a +3-only bound prunes.
+    const out = solve(
+      input(raceSlots([17, 0, 0, 0, 0, 0]), { allowTuning: true, ...mins }),
+    );
+    expect(out.loadouts[0]?.pieceIds).toContain("tuned");
+    expect(out.loadouts[0]?.total).toBe(19);
+  });
+
+  test("negative fragment bonus with a zero minimum doesn't fake a deficit", () => {
+    // Weapons goes to −5 pre-clamp with no mod budget to "fix" it; the realized stat
+    // clamps to 0, which trivially satisfies the zero minimum — the build is valid.
+    const slots = [[zero("h")], [zero("a")], [zero("c")], [zero("l")], [zero("ci")]];
+    const out = solve(input(slots, { fragmentBonus: [-5, 0, 0, 0, 0, 0] }));
+    expect(out.loadouts.length).toBe(1);
+    expect(out.loadouts[0].stats).toEqual([0, 0, 0, 0, 0, 0]);
   });
 });
 

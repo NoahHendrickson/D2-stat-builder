@@ -40,7 +40,11 @@ export interface InternalPiece {
   tuneOpts: TuneOption[];
   /** Best positive tuning contribution reachable per stat (for admissible pruning). */
   tuneStatUpside: number[];
-  /** Best total tuning contribution reachable (Balanced = +3; else 0, incl. balanced-off). */
+  /**
+   * Best realizable total tuning contribution: the max over options of the sum of
+   * positive vec components (directional = +5, Balanced = +3, no-tune = 0). Negative
+   * components don't count against it — the 0-clamp can absorb them entirely.
+   */
   tuneTotalUpside: number;
 }
 
@@ -108,21 +112,43 @@ export function buildTuneOpts(
   return opts;
 }
 
-/** Build the optimizer's internal piece representation (tune options + upside bounds). */
+/**
+ * Build the optimizer's internal piece representation (tune options + upside bounds).
+ *
+ * `mins` (the query's minimums, when known at pool-build time) tightens
+ * `tuneTotalUpside`: the leaf searcher only ever branches a piece's directionals to
+ * bridge a minimum-driven shortfall (see the `limit` logic in createTuningSearcher) —
+ * a legendary only when its tuned stat has a minimum, an exotic only when some stat
+ * does. Directionals the searcher can never apply must not inflate the top-N prune
+ * bound (the flat +5 credit costs real pruning power). Omitted `mins` falls back to
+ * the conservative all-options credit, which is always admissible.
+ */
 export function makeInternalPiece(
   p: OptimizerPiece,
   allowTuning: boolean,
   allowBalanced = true,
+  mins?: number[],
 ): InternalPiece {
   const tuneOpts = buildTuneOpts(p.tuning, allowTuning, p.exotic, allowBalanced);
+  const dirReachable =
+    mins === undefined ||
+    (p.exotic
+      ? mins.some((m) => m > 0)
+      : p.tuning !== undefined && mins[p.tuning.tuned] > 0);
   const tuneStatUpside = new Array(NUM_STATS).fill(0);
   let tuneTotalUpside = 0;
   for (const opt of tuneOpts) {
     let optTotal = 0;
     for (let s = 0; s < NUM_STATS; s++) {
+      // Per-stat upside stays unconditioned: ceiling probes raise minimums past the
+      // query's, so canReachMin/suffixUp must keep crediting every option's +5.
       if (opt.vec[s] > tuneStatUpside[s]) tuneStatUpside[s] = opt.vec[s];
-      optTotal += opt.vec[s];
+      // Positive components only: a directional's −5 can be fully absorbed by the
+      // 0-clamp (the minus stat is already ≤0 at the leaf), so a signed sum would
+      // undercount its realizable gain and make the top-N prune bound inadmissible.
+      if (opt.vec[s] > 0) optTotal += opt.vec[s];
     }
+    if (opt.applied?.kind === "directional" && !dirReachable) continue;
     if (optTotal > tuneTotalUpside) tuneTotalUpside = optTotal;
   }
   return {
@@ -414,7 +440,9 @@ export function createTuningSearcher(
       for (let s = 0; s < NUM_STATS; s++) aug[s] += bal.vec[s];
     }
     for (let s = 0; s < NUM_STATS; s++) {
-      deficits[s] = Math.max(0, mins[s] - aug[s]);
+      // A zero minimum is free: realized stats are clamped to ≥0, so a negative aug
+      // (directional −5 overshoot, negative fragments) needs no mod points to "reach" 0.
+      deficits[s] = mins[s] > 0 ? Math.max(0, mins[s] - aug[s]) : 0;
     }
     const balAsg = assignMods(deficits, mods.major, mods.minor, artCount);
     if (balAsg) {
@@ -460,6 +488,7 @@ export function createTuningSearcher(
       // UNsatisfiable ceiling probes from degenerating into exhaustive walks.
       let needed = 0;
       for (let s = 0; s < NUM_STATS; s++) {
+        if (mins[s] === 0) continue; // clamp floors realized stats at 0 — free
         const d = mins[s] - (aug[s] + suffixUp[i][s]);
         if (d > 0) {
           needed += deficitPoints(d, artCount > 0);
@@ -478,7 +507,8 @@ export function createTuningSearcher(
       }
       if (i === NUM_SLOTS) {
         for (let s = 0; s < NUM_STATS; s++) {
-          deficits[s] = Math.max(0, mins[s] - aug[s]);
+          // Same zero-minimum rule as the fast path: clamping makes mins[s] = 0 free.
+          deficits[s] = mins[s] > 0 ? Math.max(0, mins[s] - aug[s]) : 0;
         }
         const asg = assignMods(deficits, mods.major, mods.minor, artCount);
         if (!asg) return;

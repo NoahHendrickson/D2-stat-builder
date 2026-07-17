@@ -30,6 +30,7 @@ function dedupe(
   keyIncludesSet: boolean,
   allowTuning: boolean,
   allowBalanced: boolean,
+  mins: number[],
 ): InternalPiece[] {
   const map = new Map<string, InternalPiece>();
   for (const p of pieces) {
@@ -49,7 +50,7 @@ function dedupe(
       `T${tuneKey}|` +
       p.stats.join(",");
     if (!map.has(key)) {
-      map.set(key, makeInternalPiece(p, allowTuning, allowBalanced));
+      map.set(key, makeInternalPiece(p, allowTuning, allowBalanced, mins));
     }
   }
   return Array.from(map.values());
@@ -198,6 +199,9 @@ export function makeJointMinCheck(
       let maskShort = 0;
       for (let s = 0; s < NUM_STATS; s++) {
         // Deficit before suffix help; suffixStat ≥ 0, so short ≤ 0 implies d ≤ 0.
+        // A zero minimum is always met (realized stats clamp at 0), even when a
+        // negative fragment bonus drives the pre-clamp sum below zero.
+        if (mins[s] === 0) continue;
         const short = mins[s] - (sum[s] + frag[s] + sumTuneUp[s]);
         if (short <= 0) continue;
         mask |= 1 << s;
@@ -224,6 +228,9 @@ export function makeJointMinCheck(
     let maskShort = 0;
     for (let s = 0; s < NUM_STATS; s++) {
       // Deficit before suffix help; suffixStat ≥ 0, so short ≤ 0 implies d ≤ 0.
+      // A zero minimum is always met (realized stats clamp at 0), even when a
+      // negative fragment bonus drives the pre-clamp sum below zero.
+      if (mins[s] === 0) continue;
       const short = mins[s] - (sum[s] + frag[s] + sumTuneUp[s]);
       if (short <= 0) continue;
       mask |= 1 << s;
@@ -262,7 +269,7 @@ export function buildSlots(input: OptimizerInput): InternalPiece[][] {
       : exoticMode !== "specific" ||
         (p.hash !== undefined && !!exoticHashes?.includes(p.hash)));
   return input.slots.map((s) =>
-    dedupe(s.filter(eligible), reqs.length > 0, allowTuning, allowBalanced).sort(
+    dedupe(s.filter(eligible), reqs.length > 0, allowTuning, allowBalanced, input.minimums).sort(
       (a, b) => b.total - a.total,
     ),
   );
