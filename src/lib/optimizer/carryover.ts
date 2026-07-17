@@ -202,9 +202,12 @@ export function sameQueryExceptMinimums(a: OptimizerInput, b: OptimizerInput): b
   void _bMin;
 
   // allowTuning / allowBalancedTuning default to true (see bounds.ts); ?? true
-  // normalizes both sides.
-  if ((aTuning ?? true) !== (bTuning ?? true)) return false;
-  if ((aBalanced ?? true) !== (bBalanced ?? true)) return false;
+  // normalizes both sides. The balanced flag only shapes the query while tuning is
+  // on (buildTuneOpts ignores it otherwise), so with tuning off on both sides a
+  // balanced difference must not spuriously kill the carry.
+  const tuningOn = aTuning ?? true;
+  if (tuningOn !== (bTuning ?? true)) return false;
+  if (tuningOn && (aBalanced ?? true) !== (bBalanced ?? true)) return false;
   // maxResults defaults to DEFAULT_MAX_RESULTS (200).
   if ((aMax ?? 200) !== (bMax ?? 200)) return false;
 

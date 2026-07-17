@@ -194,6 +194,17 @@ describe("sameQueryExceptMinimums", () => {
     ).toBe(false);
   });
 
+  test("allowBalancedTuning is inert while tuning is off on both sides", () => {
+    // buildTuneOpts ignores the balanced flag when allowTuning is false, so these are
+    // behaviorally the same query — a balanced difference must not kill the carry.
+    expect(
+      sameQueryExceptMinimums(
+        baseInput({ allowTuning: false, allowBalancedTuning: true }),
+        baseInput({ allowTuning: false, allowBalancedTuning: false }),
+      ),
+    ).toBe(true);
+  });
+
   test("exotic mode changed → not same", () => {
     expect(
       sameQueryExceptMinimums(
